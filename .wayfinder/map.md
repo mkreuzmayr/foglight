@@ -21,6 +21,8 @@ A complete `SPEC.md` at this repo's root for foglight v1: a read-only wayfinder 
 <!-- one line per closed ticket: gist + link -->
 
 - [Graph rendering library options](tickets/003-graph-rendering-library.md) — React Flow (@xyflow/react) is the clear DOM/tailwind-friendly candidate; layout engine (dagre vs elkjs vs d3-dag) stays open for the UI prototype. Facts in `research/graph-rendering.md`.
+- [Electron-via-npx packaging feasibility](tickets/001-electron-via-npx-packaging.md) — feasible: Electron ≥42 downloads its binary lazily on first launch, so `electron` can be a plain dependency (~1 MB on headless installs); bin runs under Node and spawns `require('electron')` for the GUI. Facts in `research/electron-npx-packaging.md`.
+- [Effect.js backend architecture facts](tickets/002-effect-backend-architecture.md) — @effect/platform covers HTTP, file watching, polling, SSE/WebSocket; one shared `AppLayer` serves both Electron main (`ManagedRuntime`) and headless (`NodeRuntime.runMain`); caveats: HTTP modules "unstable", Effect 4 migration churn ahead. Facts in `research/effect-backend.md`.
 
 ## Not yet specified
 
