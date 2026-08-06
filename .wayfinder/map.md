@@ -20,6 +20,8 @@ A complete `SPEC.md` at this repo's root for foglight v1: a read-only wayfinder 
 
 <!-- one line per closed ticket: gist + link -->
 
+- [Graph rendering library options](tickets/003-graph-rendering-library.md) — React Flow (@xyflow/react) is the clear DOM/tailwind-friendly candidate; layout engine (dagre vs elkjs vs d3-dag) stays open for the UI prototype. Facts in `research/graph-rendering.md`.
+
 ## Not yet specified
 
 - **Live-update mechanics** — transport (websocket vs Electron IPC), GitHub polling cadence, file-watch debounce; hangs on the adapter interface and headless design.
