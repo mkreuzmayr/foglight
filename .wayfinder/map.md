@@ -22,13 +22,12 @@ A complete `SPEC.md` at this repo's root for foglight v1: a read-only wayfinder 
 
 - [Graph rendering library options](tickets/003-graph-rendering-library.md) — React Flow (@xyflow/react) is the clear DOM/tailwind-friendly candidate; layout engine (dagre vs elkjs vs d3-dag) stays open for the UI prototype. Facts in `research/graph-rendering.md`.
 - [Electron-via-npx packaging feasibility](tickets/001-electron-via-npx-packaging.md) — feasible: Electron ≥42 downloads its binary lazily on first launch, so `electron` can be a plain dependency (~1 MB on headless installs); bin runs under Node and spawns `require('electron')` for the GUI. Facts in `research/electron-npx-packaging.md`.
+- [Tracker adapter interface design](tickets/004-tracker-adapter-interface.md) — adapters are plain records of Effect functions held by a `TrackerRegistry` service, auto-detected and unioned (both trackers can be live at once); three ops — `listMaps`, whole-map `loadMap`, and a `changes` stream of bare invalidation ticks. Adapters extract only metadata, a shared parser handles bodies, and `frontier`/`unblocked` are derived once in the domain so the term can't mean two things. Qualified readable ids, degrade-don't-fail with tagged errors, GitHub auth env-token-first with `gh` fallback.
+- [Map graph UI prototype](tickets/005-map-graph-ui-prototype.md) — the cockpit wins: a permanent rail beside a left-to-right React Flow graph, selection shared. The list view is not a secondary mode — it is always on screen and owns what the graph structurally cannot show (out of scope, warnings) and the "what do I pick up next" ordering. Dagre over elkjs; ticket detail is an accordion in the rail; dark only; motion bridges change and never redraws the map. Variants and findings on branch `prototype/map-graph-ui`.
 - [Effect.js backend architecture facts](tickets/002-effect-backend-architecture.md) — @effect/platform covers HTTP, file watching, polling, SSE/WebSocket; one shared `AppLayer` serves both Electron main (`ManagedRuntime`) and headless (`NodeRuntime.runMain`); caveats: HTTP modules "unstable", Effect 4 migration churn ahead. Facts in `research/effect-backend.md`.
 
 ## Not yet specified
 
-- **Live-update mechanics** — transport (websocket vs Electron IPC), GitHub polling cadence, file-watch debounce; hangs on the adapter interface and headless design.
-- **Map picker UX** — how multiple maps are listed and chosen; hangs on the UI prototype.
-- **Ticket detail view** — what clicking a node reveals (body, resolution, assets) and how; hangs on the UI prototype.
 - **CLI surface** — `npx foglight` flags (`--headless`, `--port`, repo path, tracker override); hangs on headless design and packaging research.
 - **npm package layout & release process** — bin entries, Electron binary handling, CI, versioning; hangs on the Electron-via-npx packaging research.
 - **SPEC.md assembly** — the closing act: fold every decision into the spec once the rest of the map is walked.
