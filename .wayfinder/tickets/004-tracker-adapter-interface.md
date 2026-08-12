@@ -12,6 +12,15 @@ What is the read-only tracker adapter's interface? Pin down: the operations fogl
 
 ## Resolution
 
+> **Partially reversed by [Map picker and multi-map UX](008-map-picker-ux.md).**
+> Two decisions below no longer hold: adapters are **not** both live at once,
+> and there **is** a precedence rule. Foglight resolves exactly one adapter per
+> repo — `.wayfinder/` wins over a GitHub `origin`, `--tracker` forces it — so
+> `listMaps()` reads one adapter rather than unioning, and `TrackerRegistry` is
+> renamed the **detected tracker**. Everything else here stands, including
+> lightweight `listMaps`, whole-map `loadMap`, bare change ticks, hybrid
+> normalization, qualified ids, and the failure taxonomy.
+
 Settled over four grilling rounds (16 decisions). Guiding principle throughout: **adapters report facts; the shared domain derives meaning.**
 
 ### Shape

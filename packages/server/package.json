@@ -1,0 +1,25 @@
+{
+  "name": "@foglight/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/experimental": "0.61.1",
+    "@effect/platform": "0.97.1",
+    "@effect/platform-node": "0.108.1",
+    "@foglight/core": "workspace:*",
+    "effect": "3.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

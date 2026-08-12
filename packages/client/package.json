@@ -1,0 +1,42 @@
+{
+  "name": "@foglight/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "probe": "tsx test/cockpit.probe.ts"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
+    "@effect/platform": "0.97.1",
+    "@foglight/core": "workspace:*",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-query": "^5.101.4",
+    "@xyflow/react": "^12.11.2",
+    "clsx": "^2.1.1",
+    "effect": "3.22.1",
+    "effect-query": "^0.2.1",
+    "motion": "^13.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.16",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "playwright": "^1.62.1",
+    "tailwindcss": "^4.1.16",
+    "tsx": "^4.23.11",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^4.1.10"
+  }
+}

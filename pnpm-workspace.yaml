@@ -1,0 +1,14 @@
+packages:
+  - packages/*
+
+# `prototype/` is a throwaway artifact with its own workspace root and lockfile
+# (SPEC.md preamble) — deliberately not a member here.
+
+allowBuilds:
+  # Electron's postinstall is what fetches the ~120 MB binary. Allowed here so a
+  # dev checkout can launch the GUI; end users hit it lazily on first launch
+  # instead, which is the whole point of the packaging decision (SPEC.md §11).
+  electron: true
+  esbuild: true
+  "@parcel/watcher": true
+  msgpackr-extract: true

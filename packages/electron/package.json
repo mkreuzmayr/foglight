@@ -1,0 +1,22 @@
+{
+  "name": "@foglight/electron",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@foglight/core": "workspace:*",
+    "@foglight/server": "workspace:*",
+    "effect": "3.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "electron": "^43.3.0",
+    "typescript": "^5.9.3"
+  }
+}

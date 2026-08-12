@@ -1,0 +1,287 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* THROWAWAY PROTOTYPE — foglight design tokens.
+   Dark-only by decision: foglight sits next to a terminal and an editor.
+
+   Locks (one system each, applied everywhere):
+   - Accent: a single pink. Every other colour is *semantic state*, never decoration.
+   - Radius: --r-surface for panels/cards, --r-control for rows/buttons, pill for chips.
+   - Motion: only the curves and durations below. No ad-hoc cubic-beziers. */
+
+@theme {
+  /* ground → surface, cool near-black, never #000 */
+  --color-ground: #08080a;
+  --color-panel: #0e0e11;
+  --color-panel-2: #15151a;
+  --color-hair: #22222a;
+  --color-hair-bright: #33333e;
+
+  --color-ink: #edecf0;
+  --color-ink-dim: #a09eaa;
+  --color-ink-faint: #6d6b78;
+
+  --color-accent: #e879a6;
+  --color-accent-soft: #3d1f2e;
+
+  /* state, not decoration */
+  --color-decided: #5fd8ad;
+  --color-decided-soft: #102d26;
+  --color-claimed: #b79bff;
+  --color-claimed-soft: #241d3b;
+  --color-blocked: #6d6b78;
+  --color-invalid: #f4767f;
+  --color-destination: #f0c860;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+@theme {
+  /* Motion. Strong curves — the built-ins are too weak to read as intentional. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --dur-press: 120ms; /* pointer-down feedback */
+  --dur-state: 180ms; /* hover, colour, dot, caret */
+  --dur-panel: 240ms; /* accordion open */
+  --dur-exit: 160ms; /* exits are faster than entrances */
+  --dur-move: 320ms; /* relayout on screen */
+
+  /* Radius lock */
+  --r-surface: 12px;
+  --r-control: 8px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tracking is size-specific: tight as type grows, open on small caps labels. */
+.t-title {
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.t-label {
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 550;
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--r-control);
+}
+
+/* ---------------------------------------------------------------- materials */
+/* Heavier material for the structural rail; nothing translucent stacks on it. */
+.material-rail {
+  background: color-mix(in oklab, var(--color-panel) 82%, transparent);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+/* Scroll edge effect instead of a hard divider under floating chrome. */
+.edge-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+/* ------------------------------------------------------------- react flow */
+.react-flow {
+  --xy-background-color: var(--color-ground);
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+
+/* Relayout is NOT a CSS transform transition. React Flow derives edge paths from
+   node positions, so moving only the card's pixels would leave every line
+   detached mid-glide. Positions are interpolated instead — see useLayoutMotion. */
+
+/* Node arrival. Never from scale(0) — nothing appears from nothing.
+   The delay is set per node: on first paint it staggers left to right; a node
+   added by a change signal waits for its edge to finish drawing toward it. */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-card {
+  animation: node-in 260ms var(--ease-out) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+/* Departure. Starts after the edge has begun retracting, so the line leaves
+   first and the card follows it out. */
+@keyframes node-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-exiting {
+  animation: node-out 220ms var(--ease-out) 60ms both;
+}
+
+/* A morphing node replaced its predecessor in place and glides to its rank —
+   it was never absent, so it must not fade in. */
+.node-card.node-morph {
+  animation: none;
+}
+
+/* Edge arrival/departure. Paths carry pathLength=1 (see DrawnEdge), so a dash
+   of 1 covers the whole line whatever its geometry and the draw is pure CSS.
+   Exit reuses the same keyframes reversed: one gesture, retraced. */
+/* Enter and exit are separate @keyframes on purpose: they run on the same
+   element in sequence, and the spec only restarts an animation when its *name*
+   changes — reusing one keyframes block reversed made every exit jump straight
+   to its finished state. */
+@keyframes edge-draw-in {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes edge-draw-out {
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+.edge-draw-in {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: edge-draw-in 320ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-draw-out {
+  stroke-dasharray: 1;
+  animation: edge-draw-out 200ms var(--ease-out) forwards;
+}
+
+/* Dashed (fog) edges keep their dash pattern and cross-fade instead. */
+@keyframes edge-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes edge-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+.edge-fade-in {
+  animation: edge-fade-in 240ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-fade-out {
+  animation: edge-fade-out 160ms var(--ease-out) forwards;
+}
+
+/* Edges recede when a ticket is selected, so its lineage reads first. */
+.react-flow__edge {
+  transition: opacity var(--dur-state) ease;
+}
+.edges-dimmed .react-flow__edge:not(.edge-lit) {
+  opacity: 0.25;
+}
+
+/* -------------------------------------------------------------------- fog */
+/* The one perpetual animation here, and the only one carrying meaning:
+   unresolved space should not sit perfectly still. Very low amplitude. */
+@keyframes fog-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate3d(14px, -8px, 0) scale(1.03);
+    opacity: 0.72;
+  }
+}
+.fog-veil {
+  animation: fog-drift 18s var(--ease-in-out) infinite;
+}
+.fog-veil-2 {
+  animation: fog-drift 25s var(--ease-in-out) infinite reverse;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-hair-bright);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------------------------------- accessibility */
+/* Reduced motion: fewer and gentler, not zero. Opacity stays, travel goes. */
+@media (prefers-reduced-motion: reduce) {
+  .node-card,
+  .node-exiting,
+  .edge-draw-in,
+  .edge-draw-out,
+  .edge-fade-in,
+  .edge-fade-out {
+    animation: none;
+  }
+  /* without their exit animation, ghosts would linger visibly for the window */
+  .node-exiting,
+  .edge-draw-out,
+  .edge-fade-out {
+    opacity: 0;
+  }
+  .fog-veil,
+  .fog-veil-2 {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material-rail {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material-rail {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+  * {
+    border-color: var(--color-hair-bright);
+  }
+}
