@@ -1,0 +1,395 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* THROWAWAY PROTOTYPE — tone variations on the settled Graphite cockpit.
+   Settled by rounds one to three: dark glass shell, Harbor's segmented rail,
+   flat neutral macOS-dark ground, monochrome accents, colour as ticket state
+   only. Nothing about the concept or layout moves in this round.
+
+   What varies is *touch*: corner radii, glass opacity and blur, hairline and
+   ink contrast, shadow depth — the difference between the same design feeling
+   plush, machined, or atmospheric. Each tone is a token scope stacked on the
+   shared graphite palette. */
+
+@theme {
+  /* The picked Graphite system, now the base. Flat neutral greys, no tint. */
+  --color-ground: #0f0f10;
+  --color-panel: #1b1b1d;
+  --color-panel-2: #242427;
+  --color-hair: #2a2a2d;
+  --color-hair-bright: #3a3a3e;
+
+  --color-ink: #f2f2f3;
+  --color-ink-dim: #a3a3a8;
+  --color-ink-faint: #757579;
+
+  /* Monochrome accent — colour is reserved for ticket state. */
+  --color-accent: #d9d9de;
+  --color-accent-soft: #323236;
+
+  --color-decided: #4fbf8f;
+  --color-decided-soft: #142c23;
+  --color-claimed: #a993e0;
+  --color-claimed-soft: #272138;
+  --color-blocked: #5c5c61;
+  --color-invalid: #e57373;
+  --color-destination: #d4b45c;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+@theme {
+  /* Motion. Same curves as the shipped cockpit — the canvas contract. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --dur-press: 120ms;
+  --dur-state: 180ms;
+  --dur-panel: 240ms;
+  --dur-exit: 160ms;
+  --dur-move: 320ms;
+
+  --r-surface: 14px;
+  --r-control: 9px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ============================================================ shared scope */
+.theme-graphite {
+  --dot: #1e1e20;
+  --canvas: transparent;
+  --fog-1: rgba(220, 220, 230, 0.05);
+  --fog-2: rgba(255, 255, 255, 0.03);
+
+  color: var(--color-ink);
+  background: var(--color-ground);
+}
+
+/* ==================================================================== tones */
+/* A — the picked baseline: no tone class, the defaults above. */
+
+/* --- B · Soft — plush: rounder corners, gentler hairlines, deeper but
+       fuzzier shadows, ink eased a step. */
+.tone-soft {
+  --r-surface: 18px;
+  --r-control: 12px;
+  --color-hair: #262629;
+  --color-hair-bright: #323236;
+  --color-ink: #ececee;
+  --color-ink-dim: #9d9da3;
+}
+.tone-soft .material-rail {
+  background: color-mix(in oklab, var(--color-panel) 68%, transparent);
+  backdrop-filter: blur(44px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 32px 90px rgba(0, 0, 0, 0.5);
+}
+.tone-soft .material-chip {
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.tone-soft .ticket-material {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* --- C · Crisp — machined: tighter corners, brighter hairlines and ink,
+       thinner glass, shadows short and definite. */
+.tone-crisp {
+  --r-surface: 10px;
+  --r-control: 6px;
+  --color-hair: #313134;
+  --color-hair-bright: #48484d;
+  --color-ink: #f7f7f8;
+  --color-ink-faint: #7d7d82;
+}
+.tone-crisp .material-rail {
+  background: color-mix(in oklab, var(--color-panel) 80%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.11),
+    0 14px 36px rgba(0, 0, 0, 0.6);
+}
+.tone-crisp .material-chip {
+  border-color: rgba(255, 255, 255, 0.13);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.11),
+    0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.tone-crisp .ticket-material {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* --- D · Mist — atmospheric: the thinnest glass, hairlines nearly gone,
+       the fog a step more present. The room does more of the separating. */
+.tone-mist {
+  --r-surface: 16px;
+  --r-control: 10px;
+  --color-hair: #232326;
+  --color-hair-bright: #2e2e32;
+  --dot: #1a1a1c;
+  --fog-1: rgba(222, 222, 235, 0.09);
+  --fog-2: rgba(255, 255, 255, 0.05);
+}
+.tone-mist .material-rail {
+  background: color-mix(in oklab, var(--color-panel) 50%, transparent);
+  backdrop-filter: blur(54px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 28px 90px rgba(0, 0, 0, 0.45);
+}
+.tone-mist .material-chip {
+  background: color-mix(in oklab, var(--color-panel) 60%, transparent);
+  border-color: rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(30px) saturate(140%);
+}
+.tone-mist .ticket-material {
+  background: color-mix(in oklab, var(--color-panel) 82%, transparent);
+}
+
+/* ============================================================== typography */
+.t-title {
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.t-label {
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 550;
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--r-control);
+}
+
+/* =============================================================== materials */
+.material-rail {
+  background: color-mix(in oklab, var(--color-panel) 62%, transparent);
+  backdrop-filter: blur(36px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.material-chip {
+  background: color-mix(in oklab, var(--color-panel) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+.edge-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+.pressable {
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.pressable:active {
+  transform: scale(0.985);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pressable,
+  .pressable:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ============================================================== react flow */
+.react-flow {
+  --xy-background-color: var(--canvas, var(--color-ground));
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+
+.ticket-material {
+  background: color-mix(in oklab, var(--color-panel) 90%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Canvas animation contract. UNCHANGED from the shipped cockpit. ---- */
+
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-card {
+  animation: node-in 260ms var(--ease-out) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+@keyframes node-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-exiting {
+  animation: node-out 220ms var(--ease-out) 60ms both;
+}
+
+.node-card.node-morph {
+  animation: none;
+}
+
+@keyframes edge-draw-in {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes edge-draw-out {
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+.edge-draw-in {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: edge-draw-in 320ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-draw-out {
+  stroke-dasharray: 1;
+  animation: edge-draw-out 200ms var(--ease-out) forwards;
+}
+
+@keyframes edge-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes edge-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+.edge-fade-in {
+  animation: edge-fade-in 240ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-fade-out {
+  animation: edge-fade-out 160ms var(--ease-out) forwards;
+}
+
+.react-flow__edge {
+  transition: opacity var(--dur-state) ease;
+}
+.edges-dimmed .react-flow__edge:not(.edge-lit) {
+  opacity: 0.25;
+}
+
+@keyframes fog-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate3d(14px, -8px, 0) scale(1.03);
+    opacity: 0.72;
+  }
+}
+.fog-veil {
+  animation: fog-drift 18s var(--ease-in-out) infinite;
+}
+.fog-veil-2 {
+  animation: fog-drift 25s var(--ease-in-out) infinite reverse;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+::-webkit-scrollbar {
+  width: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-hair-bright);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------- accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .node-card,
+  .node-exiting,
+  .edge-draw-in,
+  .edge-draw-out,
+  .edge-fade-in,
+  .edge-fade-out {
+    animation: none;
+  }
+  .node-exiting,
+  .edge-draw-out,
+  .edge-fade-out {
+    opacity: 0;
+  }
+  .fog-veil,
+  .fog-veil-2 {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+  * {
+    border-color: var(--color-hair-bright);
+  }
+}

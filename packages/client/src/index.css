@@ -3,37 +3,43 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
-/* THROWAWAY PROTOTYPE — foglight design tokens.
-   Dark-only by decision: foglight sits next to a terminal and an editor.
+/* Foglight design tokens — settled by the 2026-08 prototype rounds
+   (prototype/apple-restyle → nightfall-riffs → harbor-mono → graphite-touch):
+   dark glass shell over a full-bleed canvas, flat neutral macOS-dark ground
+   with no tint, monochrome interactive accents, and colour reserved for
+   semantic ticket state. Soft tone: 18/12px radii, plush glass, eased ink.
 
    Locks (one system each, applied everywhere):
-   - Accent: a single pink. Every other colour is *semantic state*, never decoration.
-   - Radius: --r-surface for panels/cards, --r-control for rows/buttons, pill for chips.
+   - Colour is state. The accent is monochrome; if something is coloured, it
+     means decided / claimed / malformed / destination — never decoration.
+   - Radius: --r-surface for panels/cards, --r-control for rows/buttons, pill
+     for chips.
    - Motion: only the curves and durations below. No ad-hoc cubic-beziers. */
 
 @theme {
-  /* ground → surface, cool near-black, never #000 */
-  --color-ground: #08080a;
-  --color-panel: #0e0e11;
-  --color-panel-2: #15151a;
-  --color-hair: #22222a;
-  --color-hair-bright: #33333e;
+  /* Flat neutral greys — hueless, never #000, no gradient anywhere. */
+  --color-ground: #0f0f10;
+  --color-panel: #1b1b1d;
+  --color-panel-2: #242427;
+  --color-hair: #262629;
+  --color-hair-bright: #323236;
 
-  --color-ink: #edecf0;
-  --color-ink-dim: #a09eaa;
-  --color-ink-faint: #6d6b78;
+  --color-ink: #ececee;
+  --color-ink-dim: #9d9da3;
+  --color-ink-faint: #757579;
 
-  --color-accent: #e879a6;
-  --color-accent-soft: #3d1f2e;
+  /* Monochrome accent: interactive chrome is white-on-grey (graphite mode). */
+  --color-accent: #d9d9de;
+  --color-accent-soft: #323236;
 
   /* state, not decoration */
-  --color-decided: #5fd8ad;
-  --color-decided-soft: #102d26;
-  --color-claimed: #b79bff;
-  --color-claimed-soft: #241d3b;
-  --color-blocked: #6d6b78;
-  --color-invalid: #f4767f;
-  --color-destination: #f0c860;
+  --color-decided: #4fbf8f;
+  --color-decided-soft: #142c23;
+  --color-claimed: #a993e0;
+  --color-claimed-soft: #272138;
+  --color-blocked: #5c5c61;
+  --color-invalid: #e57373;
+  --color-destination: #d4b45c;
 
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
@@ -50,9 +56,16 @@
   --dur-exit: 160ms; /* exits are faster than entrances */
   --dur-move: 320ms; /* relayout on screen */
 
-  /* Radius lock */
-  --r-surface: 12px;
-  --r-control: 8px;
+  /* Radius lock — Soft tone. */
+  --r-surface: 18px;
+  --r-control: 12px;
+}
+
+:root {
+  /* Canvas atmosphere. The fog is a neutral glow: unresolved, not decorated. */
+  --dot: #1e1e20;
+  --fog-1: rgba(220, 220, 230, 0.05);
+  --fog-2: rgba(255, 255, 255, 0.03);
 }
 
 html,
@@ -96,10 +109,24 @@ body {
 }
 
 /* ---------------------------------------------------------------- materials */
-/* Heavier material for the structural rail; nothing translucent stacks on it. */
+/* The rail floats as one glass panel; nothing translucent stacks on it. */
 .material-rail {
-  background: color-mix(in oklab, var(--color-panel) 82%, transparent);
-  backdrop-filter: blur(24px) saturate(140%);
+  background: color-mix(in oklab, var(--color-panel) 68%, transparent);
+  backdrop-filter: blur(44px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 32px 90px rgba(0, 0, 0, 0.5);
+}
+
+/* Small floating chrome (the legend). */
+.material-chip {
+  background: color-mix(in oklab, var(--color-panel) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
 /* Scroll edge effect instead of a hard divider under floating chrome. */
@@ -107,9 +134,25 @@ body {
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
 }
 
+/* Instant press feedback on rail rows — respond on the down, settle on the up. */
+.pressable {
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.pressable:active {
+  transform: scale(0.985);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pressable,
+  .pressable:active {
+    transition: none;
+    transform: none;
+  }
+}
+
 /* ------------------------------------------------------------- react flow */
 .react-flow {
-  --xy-background-color: var(--color-ground);
+  /* The ground itself is the canvas — the rail floats over it. */
+  --xy-background-color: transparent;
 }
 .react-flow__attribution {
   display: none;
@@ -122,9 +165,15 @@ body {
   cursor: pointer;
 }
 
+/* Ticket card material: barely-translucent panel with a caught top edge. */
+.ticket-material {
+  background: color-mix(in oklab, var(--color-panel) 90%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
 /* Relayout is NOT a CSS transform transition. React Flow derives edge paths from
    node positions, so moving only the card's pixels would leave every line
-   detached mid-glide. Positions are interpolated instead — see useLayoutMotion. */
+   detached mid-glide. Positions are interpolated instead — see useSnapshotDiff. */
 
 /* Node arrival. Never from scale(0) — nothing appears from nothing.
    The delay is set per node: on first paint it staggers left to right; a node
@@ -270,14 +319,16 @@ body {
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .material-rail {
+  .material-rail,
+  .material-chip {
     background: var(--color-panel);
     backdrop-filter: none;
   }
 }
 
 @media (prefers-contrast: more) {
-  .material-rail {
+  .material-rail,
+  .material-chip {
     background: var(--color-panel);
     backdrop-filter: none;
   }

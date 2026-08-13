@@ -1,6 +1,6 @@
 /**
- * The cockpit (SPEC.md §8): a permanent rail beside a left-to-right React Flow
- * graph, selection shared both ways.
+ * The cockpit (SPEC.md §8): a floating glass rail over a full-bleed left-to-
+ * right React Flow graph, selection shared both ways.
  *
  * The two halves answer different questions, and neither is a mode:
  *   - **the graph** answers "what is the shape of this effort"
@@ -8,7 +8,9 @@
  *     structurally cannot show: out-of-scope entries, which have no position
  *     on a dependency graph, and parse warnings
  *
- * There is no view toggle. Both, always.
+ * There is no view toggle. Both, always. The rail filters through a segmented
+ * control (Next / All / Decided) rather than accordions: "Next" is the
+ * standing answer, "All" is the whole map, "Decided" is the record.
  *
  * React Flow runs **uncontrolled** here, and every snapshot is applied to its
  * store as a diff (`useSnapshotDiff`). This is not a preference — handing it a
@@ -30,8 +32,8 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { CaretRight, Target, Warning, Waves, type Icon } from "@phosphor-icons/react";
+import { motion, useReducedMotion } from "motion/react";
+import { Target, Warning, Waves, type Icon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   blocked as blockedTickets,
@@ -59,7 +61,8 @@ import { useSnapshotDiff } from "@/lib/useSnapshotDiff";
 import { cn } from "@/lib/utils";
 import type { ConnectionState } from "@/lib/live.js";
 
-const RAIL_W = 348;
+const RAIL_W = 336;
+const RAIL_INSET = 16;
 
 /* =============================================================== graph nodes */
 
@@ -85,11 +88,11 @@ const TicketCard = ({ data, selected }: NodeProps & { data: TicketNodeData }) =>
       <Handle type="target" position={Position.Left} />
       <div
         className={cn(
-          "node-card relative flex items-start gap-2.5 overflow-hidden bg-panel/90 py-2.5 pl-3.5 pr-3",
+          "node-card ticket-material relative flex items-start gap-2.5 overflow-hidden py-2.5 pl-3.5 pr-3",
           "rounded-[var(--r-surface)] border",
           style.border,
           state === "blocked" && "opacity-65",
-          selected && "bg-panel-2 ring-1 ring-ink/45",
+          selected && "ring-1 ring-ink/45",
           life.className,
         )}
         style={{ width: NODE_W, ...life.style }}
@@ -122,7 +125,7 @@ const FogCard = ({ data }: NodeProps & { data: Lifecycle & { term: string } }) =
     <Handle type="target" position={Position.Left} />
     <div
       className={cn(
-        "node-card flex items-center gap-2 rounded-[var(--r-surface)] border border-dashed border-hair-bright/60 bg-white/[0.015] px-3 py-2.5",
+        "node-card flex items-center gap-2 rounded-[var(--r-surface)] border border-dashed border-hair-bright/60 bg-transparent px-3 py-2.5",
         lifecycle(data).className,
       )}
       style={{ width: NODE_W - 24, ...lifecycle(data).style }}
@@ -164,6 +167,7 @@ const edgeTypes = { drawn: DrawnEdge as never };
  * The fog veil — the only perpetual animation in the app, because "unresolved"
  * is the one state that should not sit perfectly still. Rendered through
  * `<ViewportPortal />` so it lives in graph coordinates and pans with the map.
+ * A neutral glow: even the fog obeys the colour discipline.
  */
 const FogVeil = () => {
   const fog = useNodes().filter((n) => n.type === "fog" && n.data["exiting"] !== true);
@@ -178,8 +182,8 @@ const FogVeil = () => {
         className="pointer-events-none"
         style={{ position: "absolute", left, top, width: right - left, height: bottom - top }}
       >
-        <div className="fog-veil absolute inset-0 bg-[radial-gradient(ellipse_at_40%_50%,rgba(183,155,255,0.13),transparent_70%)] blur-2xl" />
-        <div className="fog-veil-2 absolute inset-x-16 inset-y-6 bg-[radial-gradient(ellipse_at_65%_45%,rgba(232,121,166,0.10),transparent_65%)] blur-3xl" />
+        <div className="fog-veil absolute inset-0 bg-[radial-gradient(ellipse_at_40%_50%,var(--fog-1),transparent_70%)] blur-2xl" />
+        <div className="fog-veil-2 absolute inset-x-16 inset-y-6 bg-[radial-gradient(ellipse_at_65%_45%,var(--fog-2),transparent_65%)] blur-3xl" />
       </div>
     </ViewportPortal>
   );
@@ -187,98 +191,40 @@ const FogVeil = () => {
 
 /* ===================================================================== rail */
 
-const Meter = ({ snapshot }: { snapshot: MapSnapshot }) => {
-  const p = progress(snapshot);
+/** Progress as a ring beside the destination — the header's whole readout. */
+const Ring = ({ closed, total }: { closed: number; total: number }) => {
+  const r = 13;
+  const c = 2 * Math.PI * r;
+  const frac = total === 0 ? 0 : closed / total;
   return (
-    <div className="mt-3.5">
-      {/* One tick per ticket, not a percentage bar: it shows *shape* as well
-          as progress — where the decided ones sit in the route. */}
-      <div className="flex h-[3px] gap-[3px] overflow-hidden rounded-full">
-        {snapshot.tickets.map((ticket) => (
-          <span
-            key={ticket.id}
-            className={cn("flex-1 rounded-full", stateStyle[stateOf(ticket, snapshot)].dot)}
-            style={{ opacity: ticket.status === "closed" ? 1 : 0.35 }}
-          />
-        ))}
-      </div>
-      <div className="mt-2 flex justify-between text-[10.5px] text-ink-faint">
-        <span className="t-mono">
-          {p.closed}/{p.total} decided
-        </span>
-        <span>
-          {p.fog} {p.fog === 1 ? "patch" : "patches"} of fog
-        </span>
-      </div>
-    </div>
+    <svg width="34" height="34" viewBox="0 0 34 34" className="shrink-0 -rotate-90">
+      <circle cx="17" cy="17" r={r} fill="none" strokeWidth="3" className="stroke-hair-bright" />
+      <circle
+        cx="17"
+        cy="17"
+        r={r}
+        fill="none"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - frac)}
+        className="stroke-accent transition-[stroke-dashoffset] duration-[var(--dur-move)] ease-[var(--ease-in-out)] motion-reduce:transition-none"
+      />
+    </svg>
   );
 };
 
-const Section = ({
-  label,
-  count,
-  tint,
-  defaultOpen = true,
-  children,
-}: {
-  label: string;
-  count: number;
-  tint: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) => {
-  const [open, setOpen] = useState(defaultOpen);
-  const reduce = useReducedMotion();
-  const id = `section-${label.replace(/\s+/g, "-")}`;
+type Segment = "next" | "all" | "decided";
 
-  return (
-    <section className="border-b border-hair/70">
-      <h2>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          aria-controls={id}
-          className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-ink-faint hover:text-ink-dim active:bg-panel-2"
-        >
-          <CaretRight
-            size={11}
-            className={cn(
-              "shrink-0 transition-transform duration-[var(--dur-state)] ease-[var(--ease-out)] motion-reduce:transition-none",
-              tint,
-              open && "rotate-90",
-            )}
-            weight="bold"
-          />
-          <span className="t-label">{label}</span>
-          <span className="t-mono ml-auto text-[10px]">{count}</span>
-        </button>
-      </h2>
-      <AnimatePresence initial={false}>
-        {open ? (
-          <motion.div
-            id={id}
-            key="body"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={
-              reduce
-                ? { duration: 0 }
-                : {
-                    height: { duration: 0.24, ease: [0.23, 1, 0.32, 1] },
-                    opacity: { duration: 0.16 },
-                  }
-            }
-            style={{ overflow: "hidden" }}
-          >
-            <div className="pb-2">{children}</div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </section>
-  );
-};
+const SEGMENTS: Array<{ key: Segment; label: string }> = [
+  { key: "next", label: "Next" },
+  { key: "all", label: "All" },
+  { key: "decided", label: "Decided" },
+];
+
+const MiniHeader = ({ label, tint }: { label: string; tint?: string }) => (
+  <h2 className={cn("t-label px-4 pb-1 pt-3 text-ink-faint", tint)}>{label}</h2>
+);
 
 const Row = ({
   ticket,
@@ -304,13 +250,13 @@ const Row = ({
         // Respond on pointer-down, untransitioned, so selection feels instant.
         onPointerDown={onSelect}
         aria-current={selected ? "true" : undefined}
-        className="relative flex w-full items-start gap-2.5 rounded-[var(--r-control)] px-2 py-2 text-left"
+        className="pressable relative flex w-full items-start gap-2.5 rounded-[var(--r-control)] px-2 py-2 text-left"
       >
         {selected ? (
           <motion.span
             layoutId="rail-selection"
-            className="absolute inset-0 -z-10 rounded-[var(--r-control)] bg-panel-2 ring-1 ring-hair"
-            transition={reduce ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.22 }}
+            className="absolute inset-0 -z-10 rounded-[var(--r-control)] bg-white/[0.07] ring-1 ring-white/10"
+            transition={reduce ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
           />
         ) : null}
         <StateIcon size={13} className={cn("mt-[3px] shrink-0", style.text)} weight="regular" />
@@ -353,6 +299,7 @@ const Inner = (props: CockpitProps) => {
   seed.current ??= decorateFirstPaint(target);
   const reduce = useReducedMotion() ?? false;
   const rf = useReactFlow();
+  const [segment, setSegment] = useState<Segment>("next");
 
   // Layout only re-runs when the *structure* moved. A typo fix must not move
   // a card, so `data` is patched in place under an unchanged hash.
@@ -396,6 +343,13 @@ const Inner = (props: CockpitProps) => {
 
   const pick = (id: ResourceId) => {
     onSelect(id);
+    // A picked ticket must be visible in the rail: hop the segment over if the
+    // current filter would hide its row (canvas → rail selection especially).
+    const ticket = snapshot.tickets.find((t) => t.id === id);
+    if (ticket !== undefined) {
+      if (ticket.status === "closed" && segment === "next") setSegment("decided");
+      if (ticket.status === "open" && segment === "decided") setSegment("next");
+    }
     // The viewport never moves on its own — but it may move because a person
     // asked for this ticket. That is not the same thing (SPEC.md §8).
     rf.fitView({ nodes: [{ id: String(id) }], padding: 3.2, duration: 320, maxZoom: 1.15 });
@@ -418,11 +372,57 @@ const Inner = (props: CockpitProps) => {
       />
     ));
 
+  const fogRows = snapshot.fog.map((patch) => (
+    <div key={patch.id} className="px-4 py-1.5">
+      <div className="t-title text-[12px] italic text-ink-dim">{patch.term}</div>
+      <div className="mt-0.5 text-[10.5px] leading-snug text-ink-faint">
+        {patch.hangsOn.length > 0
+          ? `hangs on ${patch.hangsOn.join(", ")}`
+          : "not yet hanging on anything"}
+      </div>
+    </div>
+  ));
+
   return (
-    <div className="flex h-full bg-ground">
+    <div className="relative h-full overflow-hidden bg-ground">
+      {/* Full-bleed canvas; the rail is a material floating over it. */}
+      <div className={cn("absolute inset-0", selected !== null && "edges-dimmed")}>
+        <ReactFlow
+          defaultNodes={seed.current.nodes}
+          defaultEdges={seed.current.edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          // The `fitView` *prop*, not a fitView call on init: React Flow defers
+          // it until nodes have measured, whereas `onInit` fires before that
+          // and fits to placeholder dimensions. This is the only automatic
+          // viewport move in the app — thereafter the viewport never moves on
+          // its own (SPEC.md §8).
+          fitView
+          fitViewOptions={{
+            // The graph fits into the space the glass rail leaves free.
+            padding: {
+              left: `${RAIL_W + RAIL_INSET * 2 + 24}px`,
+              top: "48px",
+              right: "48px",
+              bottom: "48px",
+            },
+          }}
+          minZoom={0.25}
+          maxZoom={1.5}
+          nodesDraggable={false}
+          onNodeClick={(_, node) =>
+            node.type === "ticket" ? pick(node.id as ResourceId) : onSelect(null)
+          }
+          onPaneClick={() => onSelect(null)}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="var(--dot)" />
+          <FogVeil />
+        </ReactFlow>
+      </div>
+
       <aside
-        className="material-rail relative z-10 flex shrink-0 flex-col border-r border-hair"
-        style={{ width: RAIL_W }}
+        className="material-rail absolute z-10 flex flex-col overflow-hidden rounded-[22px]"
+        style={{ width: RAIL_W, left: RAIL_INSET, top: RAIL_INSET, bottom: RAIL_INSET }}
         aria-label="Map index"
       >
         <RailHeader
@@ -433,82 +433,120 @@ const Inner = (props: CockpitProps) => {
           onRetry={props.onRetry}
           onOpenMap={props.onOpenMap}
         />
-        <div className="px-4 pb-4">
-          <div className="rounded-[var(--r-surface)] border border-destination/25 bg-destination/[0.05] px-3 py-2.5">
-            <div className="flex items-center gap-1.5">
-              <Target size={13} className="text-destination" />
-              <span className="t-label text-destination">destination</span>
+
+        <div className="px-4 pb-3">
+          <div className="flex items-center gap-3">
+            <Ring closed={p.closed} total={p.total} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <Target size={12} className="shrink-0 text-destination" />
+                <span className="t-mono text-[10.5px] text-ink-faint">
+                  {p.closed}/{p.total} decided, {p.fog} fog
+                </span>
+              </div>
+              <p
+                className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-ink-dim"
+                title={snapshot.destination}
+              >
+                {snapshot.destination}
+              </p>
             </div>
-            <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-dim">
-              {snapshot.destination}
-            </p>
           </div>
-          <Meter snapshot={snapshot} />
+
+          <div
+            role="tablist"
+            aria-label="Filter tickets"
+            className="mt-3.5 flex rounded-full bg-white/[0.05] p-[3px] ring-1 ring-white/[0.07]"
+          >
+            {SEGMENTS.map((s) => (
+              <button
+                key={s.key}
+                role="tab"
+                aria-selected={segment === s.key}
+                onClick={() => setSegment(s.key)}
+                className={cn(
+                  "relative flex-1 rounded-full py-1 text-center text-[11px]",
+                  segment === s.key ? "font-medium text-ink" : "text-ink-faint hover:text-ink-dim",
+                )}
+              >
+                {segment === s.key ? (
+                  <motion.span
+                    layoutId="segment-thumb"
+                    className="absolute inset-0 rounded-full bg-white/[0.09] ring-1 ring-white/10"
+                    transition={
+                      reduce ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }
+                    }
+                  />
+                ) : null}
+                <span className="relative">{s.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Ordered by the map's own sections — this ordering *is* the answer to
-            "what do I pick up next". */}
-        <div className="edge-fade-top min-h-0 flex-1 overflow-y-auto">
-          <Section label="frontier" count={front.length} tint="text-accent">
-            {front.length > 0 ? (
-              rows(front)
+        {/* One continuous list under the filter — "Next" is the standing
+            answer to "what do I pick up next". */}
+        <div className="edge-fade-top min-h-0 flex-1 overflow-y-auto pb-2">
+          {segment === "next" ? (
+            <>
+              {front.length > 0 ? (
+                rows(front)
+              ) : (
+                <p className="px-4 py-2 text-[11.5px] text-ink-faint">
+                  {snapshot.tickets.length === 0
+                    ? "No tickets on this map yet."
+                    : done.length === snapshot.tickets.length
+                      ? "Every ticket is decided. The way to the destination is clear."
+                      : "Nothing takeable. Every open ticket is claimed or blocked."}
+                </p>
+              )}
+              {claimed.length > 0 ? (
+                <>
+                  <MiniHeader label="claimed" tint="text-claimed" />
+                  {rows(claimed)}
+                </>
+              ) : null}
+              {blocked.length > 0 ? (
+                <>
+                  <MiniHeader label="blocked" />
+                  {rows(blocked)}
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          {segment === "all" ? (
+            <>
+              <MiniHeader label="frontier" />
+              {rows(front)}
+              <MiniHeader label="claimed" tint="text-claimed" />
+              {rows(claimed)}
+              <MiniHeader label="blocked" />
+              {rows(blocked)}
+              <MiniHeader label="decisions so far" tint="text-decided" />
+              {rows(done)}
+              <MiniHeader label="not yet specified" />
+              {fogRows}
+              {/* Out of scope has no position on a dependency graph — the rail
+                  is the only place it can appear at all. */}
+              <MiniHeader label="out of scope" />
+              {snapshot.outOfScope.map((entry) => (
+                <div key={entry.id} className="px-4 py-1.5">
+                  <div className="text-[12px] text-ink-faint line-through decoration-hair-bright">
+                    {entry.term}
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : null}
+
+          {segment === "decided" ? (
+            done.length > 0 ? (
+              rows(done)
             ) : (
-              <p className="px-4 py-2 text-[11.5px] text-ink-faint">
-                {snapshot.tickets.length === 0
-                  ? "No tickets on this map yet."
-                  : done.length === snapshot.tickets.length
-                    ? "Every ticket is decided. The way to the destination is clear."
-                    : "Nothing takeable. Every open ticket is claimed or blocked."}
-              </p>
-            )}
-          </Section>
-          <Section label="claimed" count={claimed.length} tint="text-claimed">
-            {rows(claimed)}
-          </Section>
-          <Section label="blocked" count={blocked.length} tint="text-ink-faint" defaultOpen={false}>
-            {rows(blocked)}
-          </Section>
-          <Section
-            label="decisions so far"
-            count={done.length}
-            tint="text-decided"
-            defaultOpen={false}
-          >
-            {rows(done)}
-          </Section>
-          <Section
-            label="not yet specified"
-            count={snapshot.fog.length}
-            tint="text-ink-dim"
-            defaultOpen={false}
-          >
-            {snapshot.fog.map((patch) => (
-              <div key={patch.id} className="px-4 py-1.5">
-                <div className="t-title text-[12px] italic text-ink-dim">{patch.term}</div>
-                <div className="mt-0.5 text-[10.5px] leading-snug text-ink-faint">
-                  {patch.hangsOn.length > 0
-                    ? `hangs on ${patch.hangsOn.join(", ")}`
-                    : "not yet hanging on anything"}
-                </div>
-              </div>
-            ))}
-          </Section>
-          {/* Out of scope has no position on a dependency graph — the rail is
-              the only place it can appear at all. */}
-          <Section
-            label="out of scope"
-            count={snapshot.outOfScope.length}
-            tint="text-ink-faint"
-            defaultOpen={false}
-          >
-            {snapshot.outOfScope.map((entry) => (
-              <div key={entry.id} className="px-4 py-1.5">
-                <div className="text-[12px] text-ink-faint line-through decoration-hair-bright">
-                  {entry.term}
-                </div>
-              </div>
-            ))}
-          </Section>
+              <p className="px-4 py-2 text-[11.5px] text-ink-faint">Nothing decided yet.</p>
+            )
+          ) : null}
         </div>
 
         {snapshot.warnings.length > 0 ? (
@@ -526,44 +564,18 @@ const Inner = (props: CockpitProps) => {
         ) : null}
       </aside>
 
-      <div className={cn("relative min-w-0 flex-1", selected !== null && "edges-dimmed")}>
-        <ReactFlow
-          defaultNodes={seed.current.nodes}
-          defaultEdges={seed.current.edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          // The `fitView` *prop*, not a fitView call on init: React Flow defers
-          // it until nodes have measured, whereas `onInit` fires before that
-          // and fits to placeholder dimensions. This is the only automatic
-          // viewport move in the app — thereafter the viewport never moves on
-          // its own (SPEC.md §8).
-          fitView
-          fitViewOptions={{ padding: 0.16 }}
-          minZoom={0.25}
-          maxZoom={1.5}
-          nodesDraggable={false}
-          onNodeClick={(_, node) =>
-            node.type === "ticket" ? pick(node.id as ResourceId) : onSelect(null)
-          }
-          onPaneClick={() => onSelect(null)}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={28} size={1} color="#1b1a20" />
-          <FogVeil />
-        </ReactFlow>
-
-        {/* Translucent chrome over the canvas rather than a bar eating a strip. */}
-        <div className="material-rail pointer-events-none absolute bottom-4 right-4 flex items-center gap-3 rounded-full border border-hair px-3.5 py-2">
-          {(["frontier", "claimed", "closed", "blocked", "invalid"] as const).map((key) => (
-            <span key={key} className="flex items-center gap-1.5 text-[10px] text-ink-dim">
-              <span className={cn("size-1.5 rounded-full", stateStyle[key].dot)} />
-              {stateStyle[key].label}
-            </span>
-          ))}
-          <span className="h-3 w-px bg-hair" />
-          <span className="t-mono text-[10px] text-ink-faint">
-            {p.total} {p.total === 1 ? "ticket" : "tickets"}
+      {/* Translucent chrome over the canvas rather than a bar eating a strip. */}
+      <div className="material-chip pointer-events-none absolute bottom-5 right-5 z-10 flex items-center gap-3 rounded-full px-3.5 py-2">
+        {(["frontier", "claimed", "closed", "blocked", "invalid"] as const).map((key) => (
+          <span key={key} className="flex items-center gap-1.5 text-[10px] text-ink-dim">
+            <span className={cn("size-1.5 rounded-full", stateStyle[key].dot)} />
+            {stateStyle[key].label}
           </span>
-        </div>
+        ))}
+        <span className="h-3 w-px bg-hair" />
+        <span className="t-mono text-[10px] text-ink-faint">
+          {p.total} {p.total === 1 ? "ticket" : "tickets"}
+        </span>
       </div>
     </div>
   );

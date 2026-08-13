@@ -49,9 +49,16 @@ const main = async () => {
   const rail = page.locator('aside[aria-label="Map index"]');
   check("rail is present", (await rail.count()) === 1);
 
-  // The rail owns what the graph structurally cannot show.
-  const sections = await rail.locator("button[aria-expanded]").allInnerTexts();
-  const text = sections.join(" ").toLowerCase();
+  // The rail filters through a segmented control, not accordions.
+  const tabs = await rail.locator('[role="tab"]').allInnerTexts();
+  for (const label of ["Next", "All", "Decided"]) {
+    check(`rail segment "${label}"`, tabs.includes(label));
+  }
+
+  // The rail owns what the graph structurally cannot show — all of it under "All".
+  await rail.getByRole("tab", { name: "All" }).click();
+  await page.waitForTimeout(300);
+  const text = (await rail.innerText()).toLowerCase();
   for (const label of [
     "frontier",
     "claimed",
@@ -80,8 +87,7 @@ const main = async () => {
   await page.keyboard.press("Escape");
 
   // Selecting a ticket opens its detail *inside the rail* — never a modal.
-  const decisions = rail.getByRole("button", { name: /decisions so far/i });
-  await decisions.click();
+  await rail.getByRole("tab", { name: "Decided" }).click();
   await page.waitForTimeout(400);
   const rowCount = await rail.locator("button[aria-current], button").count();
   check("rail has selectable rows", rowCount > 0, `${rowCount}`);

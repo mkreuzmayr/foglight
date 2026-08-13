@@ -1,0 +1,406 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* THROWAWAY PROTOTYPE — riffs on the picked "Nightfall" cockpit.
+   The stance is settled: dark glass, floating rail, full-bleed canvas, Geist.
+   What varies here is the overall palette and the rail's interior layout.
+   The glass material and the whole canvas animation contract are shared —
+   every theme only re-points the same semantic vars. */
+
+@theme {
+  /* Baseline = Nightfall, the picked variant. */
+  --color-ground: #0b0b10;
+  --color-panel: #16151c;
+  --color-panel-2: #1e1d25;
+  --color-hair: #26252e;
+  --color-hair-bright: #383743;
+
+  --color-ink: #f5f4f8;
+  --color-ink-dim: #a5a3b2;
+  --color-ink-faint: #74727f;
+
+  --color-accent: #ef8fb5;
+  --color-accent-soft: #3d1f2e;
+
+  /* state, not decoration */
+  --color-decided: #56d9a2;
+  --color-decided-soft: #10312a;
+  --color-claimed: #b79bff;
+  --color-claimed-soft: #262041;
+  --color-blocked: #74727f;
+  --color-invalid: #ff7a84;
+  --color-destination: #f0c860;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+@theme {
+  /* Motion. Same curves as the shipped cockpit — the canvas contract. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --dur-press: 120ms;
+  --dur-state: 180ms;
+  --dur-panel: 240ms;
+  --dur-exit: 160ms;
+  --dur-move: 320ms;
+
+  --r-surface: 14px;
+  --r-control: 9px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ================================================================== themes */
+
+/* --- A · Nightfall — the picked baseline, unchanged. */
+.theme-nightfall {
+  --dot: #211f28;
+  --canvas: transparent;
+  --fog-1: rgba(183, 155, 255, 0.13);
+  --fog-2: rgba(239, 143, 181, 0.1);
+
+  color: var(--color-ink);
+  background: radial-gradient(120% 90% at 75% 8%, #14121d 0%, var(--color-ground) 55%);
+}
+
+/* --- B · Violet Hour — the whole room shifts indigo; the accent becomes
+       lavender, so "claimed" hands its purple to teal to stay distinct. */
+.theme-violet {
+  --color-ground: #0c0a16;
+  --color-panel: #191627;
+  --color-panel-2: #221e33;
+  --color-hair: #2b2740;
+  --color-hair-bright: #3d3857;
+
+  --color-ink: #f4f2fa;
+  --color-ink-dim: #a8a4bd;
+  --color-ink-faint: #767189;
+
+  --color-accent: #c5a3ff;
+  --color-accent-soft: #2c2347;
+
+  --color-decided: #56d9a2;
+  --color-decided-soft: #10312a;
+  --color-claimed: #5fd0c8;
+  --color-claimed-soft: #10312f;
+  --color-blocked: #767189;
+  --color-invalid: #ff7a84;
+  --color-destination: #f0c860;
+
+  --dot: #232035;
+  --canvas: transparent;
+  --fog-1: rgba(197, 163, 255, 0.14);
+  --fog-2: rgba(95, 208, 200, 0.09);
+
+  color: var(--color-ink);
+  background: radial-gradient(120% 90% at 75% 8%, #191430 0%, var(--color-ground) 55%);
+}
+
+/* --- C · Harbor — cool blue-black; cyan accent, nautical instrument feel. */
+.theme-harbor {
+  --color-ground: #08101a;
+  --color-panel: #101c28;
+  --color-panel-2: #162534;
+  --color-hair: #1f3040;
+  --color-hair-bright: #2d4256;
+
+  --color-ink: #eef4f8;
+  --color-ink-dim: #9fb2c0;
+  --color-ink-faint: #6b7d8c;
+
+  --color-accent: #59c7e8;
+  --color-accent-soft: #0e2c3a;
+
+  --color-decided: #4ed99f;
+  --color-decided-soft: #0f3126;
+  --color-claimed: #b79bff;
+  --color-claimed-soft: #262041;
+  --color-blocked: #6b7d8c;
+  --color-invalid: #ff7a84;
+  --color-destination: #f0c860;
+
+  --dot: #16222e;
+  --canvas: transparent;
+  --fog-1: rgba(89, 199, 232, 0.11);
+  --fog-2: rgba(183, 155, 255, 0.09);
+
+  color: var(--color-ink);
+  background: radial-gradient(120% 90% at 75% 8%, #0d1b2a 0%, var(--color-ground) 55%);
+}
+
+/* --- D · Ember — warm charcoal; the brand pink warms toward rose, the fog
+       glows like banked coals instead of cold haze. */
+.theme-ember {
+  --color-ground: #120e0d;
+  --color-panel: #1d1715;
+  --color-panel-2: #272019;
+  --color-hair: #322922;
+  --color-hair-bright: #46392f;
+
+  --color-ink: #f8f4f1;
+  --color-ink-dim: #b3a89f;
+  --color-ink-faint: #80756c;
+
+  --color-accent: #f58f9e;
+  --color-accent-soft: #3c2026;
+
+  --color-decided: #5bd6a0;
+  --color-decided-soft: #113028;
+  --color-claimed: #c9a3f5;
+  --color-claimed-soft: #2c2141;
+  --color-blocked: #80756c;
+  --color-invalid: #ff7a72;
+  --color-destination: #f0b860;
+
+  --dot: #241d18;
+  --canvas: transparent;
+  --fog-1: rgba(245, 143, 158, 0.1);
+  --fog-2: rgba(240, 184, 96, 0.08);
+
+  color: var(--color-ink);
+  background: radial-gradient(120% 90% at 75% 8%, #221510 0%, var(--color-ground) 55%);
+}
+
+/* ============================================================== typography */
+.t-title {
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.t-label {
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 550;
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--r-control);
+}
+
+/* =============================================================== materials */
+/* The glass is the settled decision, so it is theme-independent. */
+.material-rail {
+  background: color-mix(in oklab, var(--color-panel) 62%, transparent);
+  backdrop-filter: blur(36px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.material-chip {
+  background: color-mix(in oklab, var(--color-panel) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* Scroll edge effect instead of a hard divider under floating chrome. */
+.edge-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+/* Instant press feedback on rail rows. */
+.pressable {
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.pressable:active {
+  transform: scale(0.985);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pressable,
+  .pressable:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ============================================================== react flow */
+.react-flow {
+  --xy-background-color: var(--canvas, var(--color-ground));
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+
+.ticket-material {
+  background: color-mix(in oklab, var(--color-panel) 90%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ---- Canvas animation contract. UNCHANGED from the shipped cockpit. ---- */
+
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-card {
+  animation: node-in 260ms var(--ease-out) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+@keyframes node-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-exiting {
+  animation: node-out 220ms var(--ease-out) 60ms both;
+}
+
+.node-card.node-morph {
+  animation: none;
+}
+
+@keyframes edge-draw-in {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes edge-draw-out {
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+.edge-draw-in {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: edge-draw-in 320ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-draw-out {
+  stroke-dasharray: 1;
+  animation: edge-draw-out 200ms var(--ease-out) forwards;
+}
+
+@keyframes edge-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes edge-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+.edge-fade-in {
+  animation: edge-fade-in 240ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-fade-out {
+  animation: edge-fade-out 160ms var(--ease-out) forwards;
+}
+
+.react-flow__edge {
+  transition: opacity var(--dur-state) ease;
+}
+.edges-dimmed .react-flow__edge:not(.edge-lit) {
+  opacity: 0.25;
+}
+
+@keyframes fog-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate3d(14px, -8px, 0) scale(1.03);
+    opacity: 0.72;
+  }
+}
+.fog-veil {
+  animation: fog-drift 18s var(--ease-in-out) infinite;
+}
+.fog-veil-2 {
+  animation: fog-drift 25s var(--ease-in-out) infinite reverse;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+::-webkit-scrollbar {
+  width: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-hair-bright);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------- accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .node-card,
+  .node-exiting,
+  .edge-draw-in,
+  .edge-draw-out,
+  .edge-fade-in,
+  .edge-fade-out {
+    animation: none;
+  }
+  .node-exiting,
+  .edge-draw-out,
+  .edge-fade-out {
+    opacity: 0;
+  }
+  .fog-veil,
+  .fog-veil-2 {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+  * {
+    border-color: var(--color-hair-bright);
+  }
+}

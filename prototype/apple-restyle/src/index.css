@@ -1,0 +1,458 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* THROWAWAY PROTOTYPE — three Apple-language restylings of the foglight cockpit.
+
+   The canvas animation system (node-in/out, edge draw/retract, fog drift,
+   relayout glide) is carried over from the shipped cockpit UNCHANGED — that is
+   the brief. What varies per theme is every token the animations read through:
+   colour, material, radius, type. Each variant scopes a `.theme-*` class over
+   the same semantic vars, so the one set of keyframes serves all three.
+
+   Locks per theme (one system each):
+   - one accent; every other colour is semantic ticket state, never decoration
+   - one radius pair (--r-surface / --r-control), pill for chips
+   - motion curves and durations below only — no ad-hoc beziers in markup */
+
+@theme {
+  /* Defaults = Nightfall values, so bare utilities resolve sensibly. */
+  --color-ground: #0b0b10;
+  --color-panel: #16151c;
+  --color-panel-2: #1e1d25;
+  --color-hair: #26252e;
+  --color-hair-bright: #383743;
+
+  --color-ink: #f5f4f8;
+  --color-ink-dim: #a5a3b2;
+  --color-ink-faint: #74727f;
+
+  --color-accent: #ef8fb5;
+  --color-accent-soft: #3d1f2e;
+
+  /* state, not decoration */
+  --color-decided: #56d9a2;
+  --color-decided-soft: #10312a;
+  --color-claimed: #b79bff;
+  --color-claimed-soft: #262041;
+  --color-blocked: #74727f;
+  --color-invalid: #ff7a84;
+  --color-destination: #f0c860;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+@theme {
+  /* Motion. Same curves as the shipped cockpit — the canvas contract. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --dur-press: 120ms;
+  --dur-state: 180ms;
+  --dur-panel: 240ms;
+  --dur-exit: 160ms;
+  --dur-move: 320ms;
+
+  --r-surface: 12px;
+  --r-control: 8px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ================================================================== themes */
+/* Every theme redefines the same semantic vars; Tailwind utilities read them
+   through var(), so one component tree renders three languages. */
+
+/* --- A · Daylight — macOS app light: source-list rail, paper canvas, soft
+       tinted shadows, SF (system-ui) type. Brand pink recalibrated for white. */
+.theme-daylight {
+  --color-ground: #eef0f4;
+  --color-panel: #ffffff;
+  --color-panel-2: #f2f2f6;
+  --color-hair: #e3e3e9;
+  --color-hair-bright: #d2d2da;
+
+  --color-ink: #1d1d1f;
+  --color-ink-dim: #55555c;
+  --color-ink-faint: #85858d;
+
+  --color-accent: #cf3f77;
+  --color-accent-soft: #fbe4ee;
+
+  --color-decided: #1f8a4c;
+  --color-decided-soft: #e0f4e8;
+  --color-claimed: #7d3fc9;
+  --color-claimed-soft: #f0e6fb;
+  --color-blocked: #85858d;
+  --color-invalid: #d70015;
+  --color-destination: #a86200;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Geist Mono Variable", monospace;
+
+  --r-surface: 12px;
+  --r-control: 7px;
+
+  --dot: #d7d8e0;
+  --canvas: #fafafc;
+  --fog-1: rgba(125, 63, 201, 0.1);
+  --fog-2: rgba(207, 63, 119, 0.07);
+
+  color: var(--color-ink);
+  background: var(--color-ground);
+}
+
+/* --- B · Nightfall — visionOS-flavoured dark glass: the rail floats as an
+       inset translucent panel over a full-bleed canvas. Brand type, brand pink. */
+.theme-nightfall {
+  --dot: #211f28;
+  --canvas: transparent; /* the page's own gradient shows through */
+  --fog-1: rgba(183, 155, 255, 0.13);
+  --fog-2: rgba(239, 143, 181, 0.1);
+
+  --r-surface: 14px;
+  --r-control: 9px;
+
+  color: var(--color-ink);
+  background: radial-gradient(120% 90% at 75% 8%, #14121d 0%, var(--color-ground) 55%);
+}
+
+/* --- C · Graphite — macOS pro-app dark: solid graphite chrome, the canvas as
+       an inset viewer well, denser rows, Apple system blue as the accent. */
+.theme-graphite {
+  --color-ground: #212124;
+  --color-panel: #29292d;
+  --color-panel-2: #333338;
+  --color-hair: #3a3a3f;
+  --color-hair-bright: #4a4a51;
+
+  --color-ink: #e9e9eb;
+  --color-ink-dim: #a9a9af;
+  --color-ink-faint: #7d7d84;
+
+  --color-accent: #409cff;
+  --color-accent-soft: #16324e;
+
+  --color-decided: #3fce77;
+  --color-decided-soft: #14311f;
+  --color-claimed: #b78af0;
+  --color-claimed-soft: #2d2140;
+  --color-blocked: #7d7d84;
+  --color-invalid: #ff6b62;
+  --color-destination: #e6c463;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Geist Mono Variable", monospace;
+
+  --r-surface: 9px;
+  --r-control: 6px;
+
+  --dot: #29282e;
+  --canvas: #131316;
+  --fog-1: rgba(183, 138, 240, 0.11);
+  --fog-2: rgba(64, 156, 255, 0.08);
+
+  color: var(--color-ink);
+  background: var(--color-ground);
+}
+
+/* ============================================================== typography */
+/* Tracking is size-specific: tight as type grows, open on small labels. */
+.t-title {
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.t-label {
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 550;
+}
+/* Daylight and Graphite use macOS source-list headers instead of small caps:
+   sentence case, semibold, no tracking theatre. */
+.theme-daylight .t-label,
+.theme-graphite .t-label {
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-size: 11px;
+  font-weight: 600;
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--r-control);
+}
+
+/* =============================================================== materials */
+/* Heavier material for the structural rail; nothing translucent stacks on it. */
+.theme-daylight .material-rail {
+  background: color-mix(in oklab, var(--color-panel) 72%, transparent);
+  backdrop-filter: blur(28px) saturate(170%);
+  border-top: 1px solid rgba(255, 255, 255, 0.6); /* light catching the edge */
+}
+.theme-nightfall .material-rail {
+  background: color-mix(in oklab, var(--color-panel) 62%, transparent);
+  backdrop-filter: blur(36px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.theme-graphite .material-rail {
+  background: var(--color-panel); /* pro apps are opaque: the tool, not the view */
+}
+
+/* Small translucent chrome (legend pills, floating controls). */
+.material-chip {
+  background: color-mix(in oklab, var(--color-panel) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+.theme-daylight .material-chip {
+  box-shadow: 0 4px 18px rgba(29, 29, 31, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.7);
+}
+.theme-nightfall .material-chip {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* Scroll edge effect instead of a hard divider under floating chrome. */
+.edge-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+/* Instant press feedback on rail rows — respond on the down, settle on the up. */
+.pressable {
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.pressable:active {
+  transform: scale(0.985);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pressable,
+  .pressable:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ============================================================== react flow */
+.react-flow {
+  --xy-background-color: var(--canvas, var(--color-ground));
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__node {
+  cursor: pointer;
+}
+
+/* Ticket card material per theme — same card, different physics of light.
+   (Scoped to .ticket-material so fog and destination cards keep their own.) */
+.theme-daylight .ticket-material {
+  background: var(--color-panel);
+  box-shadow:
+    0 1px 2px rgba(29, 29, 31, 0.06),
+    0 6px 18px rgba(29, 29, 31, 0.07);
+}
+.theme-nightfall .ticket-material {
+  background: color-mix(in oklab, var(--color-panel) 90%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.theme-graphite .ticket-material {
+  background: var(--color-panel);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* ---- Canvas animation contract. UNCHANGED from the shipped cockpit. ---- */
+
+/* Relayout is NOT a CSS transform transition. React Flow derives edge paths from
+   node positions, so moving only the card's pixels would leave every line
+   detached mid-glide. Positions are interpolated instead — see useSnapshotDiff. */
+
+/* Node arrival. Never from scale(0) — nothing appears from nothing. */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-card {
+  animation: node-in 260ms var(--ease-out) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+/* Departure. Starts after the edge has begun retracting, so the line leaves
+   first and the card follows it out. */
+@keyframes node-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.node-exiting {
+  animation: node-out 220ms var(--ease-out) 60ms both;
+}
+
+/* A morphing node replaced its predecessor in place and glides to its rank —
+   it was never absent, so it must not fade in. */
+.node-card.node-morph {
+  animation: none;
+}
+
+/* Edge arrival/departure. Paths carry pathLength=1 (see DrawnEdge), so a dash
+   of 1 covers the whole line whatever its geometry and the draw is pure CSS.
+   Enter and exit are separate @keyframes on purpose: they run on the same
+   element in sequence, and the spec only restarts an animation when its *name*
+   changes. */
+@keyframes edge-draw-in {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes edge-draw-out {
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+.edge-draw-in {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: edge-draw-in 320ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-draw-out {
+  stroke-dasharray: 1;
+  animation: edge-draw-out 200ms var(--ease-out) forwards;
+}
+
+/* Dashed (fog) edges keep their dash pattern and cross-fade instead. */
+@keyframes edge-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes edge-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+.edge-fade-in {
+  animation: edge-fade-in 240ms var(--ease-out) both;
+  animation-delay: var(--draw-delay, 0ms);
+}
+.edge-fade-out {
+  animation: edge-fade-out 160ms var(--ease-out) forwards;
+}
+
+/* Edges recede when a ticket is selected, so its lineage reads first. */
+.react-flow__edge {
+  transition: opacity var(--dur-state) ease;
+}
+.edges-dimmed .react-flow__edge:not(.edge-lit) {
+  opacity: 0.25;
+}
+
+/* Fog drift — the one perpetual animation, because "unresolved" is the one
+   state that should not sit perfectly still. Very low amplitude. */
+@keyframes fog-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate3d(14px, -8px, 0) scale(1.03);
+    opacity: 0.72;
+  }
+}
+.fog-veil {
+  animation: fog-drift 18s var(--ease-in-out) infinite;
+}
+.fog-veil-2 {
+  animation: fog-drift 25s var(--ease-in-out) infinite reverse;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+::-webkit-scrollbar {
+  width: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-hair-bright);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------- accessibility */
+/* Reduced motion: fewer and gentler, not zero. Opacity stays, travel goes. */
+@media (prefers-reduced-motion: reduce) {
+  .node-card,
+  .node-exiting,
+  .edge-draw-in,
+  .edge-draw-out,
+  .edge-fade-in,
+  .edge-fade-out {
+    animation: none;
+  }
+  .node-exiting,
+  .edge-draw-out,
+  .edge-fade-out {
+    opacity: 0;
+  }
+  .fog-veil,
+  .fog-veil-2 {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material-rail,
+  .material-chip {
+    background: var(--color-panel);
+    backdrop-filter: none;
+  }
+  * {
+    border-color: var(--color-hair-bright);
+  }
+}
