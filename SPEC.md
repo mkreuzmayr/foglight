@@ -6,9 +6,10 @@ vocabulary. It ships on npm as `foglight`; `npx foglight` opens a desktop
 window, `npx foglight serve` runs the same thing headless for a browser on a
 VPS or tailnet.
 
-This spec is the destination of the wayfinder map at `.wayfinder/map.md`. It is
-written so a build session needs no other input. Supporting depth, where it
-exists, is linked — but every decision the build must honour is stated here.
+This spec is the destination of the wayfinder map at `.wayfinder/map.md`,
+extended by `.wayfinder/project-handling.map.md`. It is written so a build
+session needs no other input. Supporting depth, where it exists, is linked —
+but every decision the build must honour is stated here.
 
 **Normative companions:**
 
@@ -19,7 +20,10 @@ exists, is linked — but every decision the build must honour is stated here.
 - `prototype/map-graph-ui/` (branch `prototype/map-graph-ui`) — the settled
   cockpit (variant D), its README documenting every motion value, and the
   headless-Chromium probes kept as regression checks.
-- `research/` — verified facts behind the library choices (2026-08-06).
+- `prototype/picker-projects/` — the settled project picker (E's jump pane,
+  K's named rail switcher at G's air) and its Chromium probes.
+- `research/` — verified facts behind the library choices (2026-08-06) and
+  daemon discovery (2026-08-14, `research/daemon-discovery.md`).
 
 ## 1. Product boundaries
 
@@ -27,11 +31,16 @@ exists, is linked — but every decision the build must honour is stated here.
   executes nothing on behalf of a viewer. This assumption is load-bearing: it
   justifies the no-auth stance (§7), the one-directional SSE transport (§6),
   and the failure posture throughout.
-- **Out of scope for v1** (ruled on the map; none of these may creep in):
+- **Out of scope for v1** (ruled on the maps; none of these may creep in):
   write operations (claiming/closing/editing from the UI), driving agent
   sessions, hosted/SaaS deployment, trackers beyond local-markdown and GitHub
-  Issues, a remote-connect Electron GUI (`--connect <url>`), and multi-repo
-  serving. One repo per instance.
+  Issues, a remote-connect Electron GUI (`--connect <url>`), the Electron GUI
+  attaching to or sharing the serve daemon, a persistent project registry
+  across sessions, and remote / multi-machine project registration.
+- **Multi-repo serving is in scope, session-scoped.** The v1 map ruled it
+  out (one repo per instance). That ruling is **reversed**: one serve daemon
+  per user per machine hosts every attached project for the life of the
+  serve session, and nothing about them persists past the last detach.
 - **Degrade, don't fail.** Foglight is a diagnostic instrument for the map: a
   broken ticket is something to *see*, not hide. Malformed tickets render
   marked; dangling edges drop with a warning; drift between a map's
@@ -43,15 +52,25 @@ There is exactly one architecture: an Effect HTTP server that serves the API,
 the SSE feed, and the static client bundle. **Headless is the default shape;
 the desktop window is merely a client of it.**
 
-- A shared **`AppLayer`** composes everything. Headless entry:
-  `NodeRuntime.runMain(Layer.launch(AppLayer))`. Electron main process:
-  `ManagedRuntime.make(AppLayer)`, disposed on quit.
+- A shared **`AppLayer`** composes everything. The **serve daemon** launches
+  it with `ManagedRuntime.make(AppLayer)` and **no initial project** —
+  attachers register folders over the attacher channel. The Electron main
+  process launches the *same layer* with `ManagedRuntime.make(AppLayer)` and
+  an `initialProject`, disposed on quit. Single-project is the n=1 case of
+  the same server, not a second path.
 - The Electron renderer is an ordinary HTTP client loading
   `http://127.0.0.1:<port>` — no IPC transport, no preload API surface. The
   GUI's server takes an **OS-ephemeral port** and accepts no `--port` flag.
+  **The GUI does not attach to or share the serve daemon**; it keeps a
+  private in-process instance.
 - Headless serves the **identical Vite bundle and API**. There is no trimmed
   "remote" UI and exactly one client build.
-- One repo per instance, at cwd (optional path argument), in both modes.
+- **One serve daemon per user per machine**, discovered via an `O_EXCL`
+  claim file in the platform runtime dir — not via the HTTP port. The first
+  `foglight serve` claims and spawns a detached daemon; every further serve
+  attaches as a resident process and registers its folder as a project.
+  Projects live only for the serve session: the daemon exits when the last
+  attacher detaches, and a fresh session starts empty.
 
 **Caveats the build must expect** (from `research/effect-backend.md`, effect
 3.22.1 / @effect/platform 0.97.1): all `@effect/platform` HTTP/Socket modules
@@ -68,11 +87,11 @@ A **pnpm monorepo publishing exactly one package**. Root `package.json` is
 
 | Package             | Contents                                                                                                                                |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`     | The domain: wayfinder vocabulary types, snapshot schema, the `frontier`/`unblocked` derivation, body parser, and both tracker adapters. |
-| `packages/server`   | Effect HTTP server, SSE, file watching, GitHub polling.                                                                                 |
-| `packages/client`   | The Vite/React cockpit. Depends on `core` for **types only**.                                                                           |
-| `packages/electron` | Electron main process: window spawning, lifecycle.                                                                                      |
-| `packages/foglight` | The only published package: the `bin`, argv dispatch, assembled build.                                                                  |
+| `packages/core`     | The domain: wayfinder vocabulary types, snapshot schema, project identity (`idFor`, `qualify`), the `frontier`/`unblocked` derivation, body parser, and both tracker adapters. |
+| `packages/server`   | Effect HTTP server, project session, SSE, file watching, GitHub polling.                                                                                                       |
+| `packages/client`   | The Vite/React cockpit. Depends on `core` for **types only**.                                                                                                                   |
+| `packages/electron` | Electron main process: window spawning, lifecycle. n=1 in-process; does not speak to the serve daemon.                                                                         |
+| `packages/foglight` | The only published package: the `bin`, argv dispatch, daemon spawn/attach, assembled build.                                                                                    |
 
 **Toolchain:** Turborepo for tasks; **tsdown** (Rolldown) for the Node bundle;
 Vite for the client; Vitest + oxlint + oxfmt for test and lint. Vite+ was
@@ -85,12 +104,42 @@ least interesting part of this spec. **Node engine floor: 24**, declared in
 One bin, `foglight`, dispatching on `argv[2]`:
 
 - **`foglight [path]`** — launch the Electron GUI on the repo at `path`
-  (default cwd). Ephemeral port, no port flag.
+  (default cwd). Ephemeral port, no port flag. Private in-process server;
+  does not attach to the serve daemon.
 - **`foglight serve [path]`** — headless. A subcommand, not a `--headless`
   flag, and **no environment auto-detection** (no `DISPLAY`/SSH sniffing).
-  - `--port` — default **4747**; a collision **fails loudly** (no
-    auto-increment: a drifting port invalidates the printed URL and any
-    `tailscale serve` mapping aimed at it).
+  Every serve is a **resident attacher**: it stays until Ctrl-C, and its
+  lifetime *is* its project's registration. The daemon is nobody's
+  foreground process.
+  - The **first** serve `O_EXCL`-claims the runtime dir and spawns a
+    **detached daemon** (hidden `foglight daemon`, not a user-facing
+    command) over a Unix-domain socket (Linux/macOS) or named pipe
+    (Windows). The daemon hosts `AppLayer`.
+  - **Further** serves attach to that daemon and register their folder as a
+    project. A second serve on an already-registered path errors out
+    ("this path is already registered") — no refcounting, no spectator
+    mode.
+  - Discovery is via the claim file and IPC socket in the **platform
+    runtime dir**, regardless of port: Linux `$XDG_RUNTIME_DIR/foglight`,
+    macOS `~/Library/Application Support/foglight` (socket under
+    `$TMPDIR`), Windows `%LOCALAPPDATA%\foglight`. `FOGLIGHT_RUNTIME_DIR`
+    isolates a session. Handshake is the truth; a dead pid steals a stale
+    claim.
+  - Last attacher out is **claim-file-first**, then Tailscale teardown,
+    then exit. No grace period. A connecting attacher either wins the claim
+    and spawns fresh or connects to a fully-live daemon — it can never join
+    a dying one. Browser tabs recover via SSE auto-reconnect when a new
+    session starts.
+  - Daemon crash and version-skew at handshake share the same recovery:
+    attachers see the socket close, race the claim, the winner respawns,
+    and every survivor re-registers. Sessions self-heal to the newest
+    binary.
+  - `--port` — default **4747**; a collision on the daemon's bind **fails
+    loudly** (no auto-increment: a drifting port invalidates the printed
+    URL and any `tailscale serve` mapping aimed at it). A later attacher
+    whose `--port`/`--host`/`--tailscale*` disagree with the daemon
+    **warns and proceeds** — flags transfer ownership to the daemon at
+    spawn.
   - `--host` — default `127.0.0.1`. `0.0.0.0` is allowed but prints a
     prominent startup banner naming exactly what is exposed (map contents,
     read-only, no auth) and pointing at the Tailscale flags.
@@ -98,11 +147,31 @@ One bin, `foglight`, dispatching on `argv[2]`:
     `tailscale ip -4`.
   - `--tailscale-serve` (with `--tailscale-serve-port`) — run
     `tailscale serve` so Tailscale terminates HTTPS, yielding a MagicDNS
-    `https://machine.tailnet.ts.net/` URL. Torn down on exit, best-effort.
-    Both Tailscale flags fail with a clean message when the `tailscale` CLI is
-    absent or down. (tsnet embedding is Go-only; shell-outs are the design,
-    not a shortcut.)
-- **`--tracker local|github`** (both modes) — force the tracker choice (§5).
+    `https://machine.tailnet.ts.net/` URL. Torn down on daemon exit,
+    best-effort — daemon-owned regardless of which attacher carried the
+    flag. Both Tailscale flags fail with a clean message when the
+    `tailscale` CLI is absent or down. (tsnet embedding is Go-only;
+    shell-outs are the design, not a shortcut.)
+  - `--verbose` — stream the daemon log over the attacher channel,
+    dev-server style. Without it, the attacher prints the session URL + QR
+    once, then one line per lifecycle event (project joined/left, daemon
+    exiting).
+- **`foglight status`** — a one-shot of the same handshake with no path:
+  prints daemon pid, session URL, and projects, or `no session` when the
+  claim is absent.
+- **`--tracker local|github`** (GUI and serve) — force the tracker choice
+  for that project (§5).
+
+The wire is **NDJSON** over the IPC socket, one JSON object per line with a
+`type` field, schema-validated with `effect/Schema` at both ends: hello /
+hello-reply / event / log-line / shutdown-request. Registration is implicit
+in the channel — the handshake names the canonical path (or no path, for
+status); socket close unregisters, covering even SIGKILL. Owner-only
+filesystem permissions are the access control. Effect's `Command` cannot
+detach: the one spawn call is raw `child_process.spawn`. Detached spawn
+survives terminal close, not logout — which fits session-scoped
+persistence. The detached spawn's stdio points at a log file in the runtime
+dir (`daemon.log`).
 
 `foglight serve` prints the reachable URL — the MagicDNS one under
 `--tailscale-serve` — **plus a terminal QR code** (the phone browser is the
@@ -132,9 +201,9 @@ shell, and write access; foglight is read-only and uses none.
 Guiding principle: **adapters report facts; the shared domain derives
 meaning.**
 
-### Detection — one repo, one tracker
+### Detection — one project, one tracker
 
-Foglight resolves **exactly one adapter per repo**:
+Foglight resolves **exactly one adapter per project**:
 
 1. `.wayfinder/` present → **local-markdown**;
 2. else a GitHub `origin` remote → **GitHub Issues**;
@@ -142,25 +211,41 @@ Foglight resolves **exactly one adapter per repo**:
 
 Local wins because `.wayfinder/` is a deliberate artifact, works offline, and
 nearly every repo has a GitHub remote that would otherwise hijack detection.
-Adapters are **never live side by side** and nothing ever unions across them.
-(An earlier design had both adapters live with the picker unioning; it was
-**reversed** — do not resurrect `TrackerRegistry`-as-collection. The service is
-the **detected tracker**.)
+**Within a project**, adapters are never live side by side and nothing ever
+unions across them. **Across projects**, each adapter runs independently —
+two attached folders can be local-markdown and GitHub at once. (An earlier
+design had both adapters live *in one repo* with the picker unioning; it was
+**reversed** — do not resurrect `TrackerRegistry`-as-collection. The service
+is the **detected tracker**, per project.)
+
+Detection is **live**. A folder with no detectable tracker **registers
+anyway** as an empty project (`state: no-tracker`) with a warning; the
+attacher stays resident. Detection re-runs as part of the project's read
+loop, so a `.wayfinder/` created later brings the project alive via a
+`projects` event; a tracker that disappears demotes it back. A forced
+`--tracker` that cannot resolve still attaches, `state: error`. Degrade,
+don't fail, both ways.
 
 No config file in v1. The GitHub adapter reads the current clone's `origin`
-only — no arbitrary `owner/repo` flag.
+only — no arbitrary `owner/repo` flag. The daemon starts with **no
+project**; Electron (and any n=1 client) passes `initialProject`.
 
 ### Shape and operations
 
 `TrackerAdapter` is a **plain record of Effect-returning functions, not a
-service** (adapters are values; Effect Layers are singleton-per-tag). Only the
-detected-tracker service earns a tag: it does detection and holds the live
-adapter. Three operations:
+service** (adapters are values; Effect Layers are singleton-per-tag).
+Detection returns one adapter per project; the session holds them. Three
+operations:
 
 - **`listMaps() → MapDescriptor[]`** — lightweight: id, title, destination,
   open/closed counts, last-changed timestamp. Deliberately **no frontier
   count** (it would force reading every ticket's dependencies, undoing the
-  lightweight contract). Never triggers a full load.
+  lightweight contract). Never triggers a full load. Adapters stay
+  project-blind; the session stamps a project reference (id + name) on each
+  descriptor. HTTP `GET /api/maps` is one flat aggregated list the picker
+  groups client-side. A failing project contributes zero descriptors plus a
+  warning — the list never fails whole. `GET /api/projects` lists
+  `{ id, name, path, state, trackerKind? }`.
 - **`loadMap(id) → MapSnapshot`** — whole-map read: map sections, **all**
   tickets open and closed, all blocking edges, warnings. No lazy
   detail-on-click.
@@ -183,10 +268,24 @@ status/assignee/blocked-by — never from GitHub's native
 
 ### Identity
 
-Qualified, human-readable ids: `github:owner/repo#42`,
-`local:.wayfinder/map.md`,
-`local:.wayfinder/map.md#fog/live-update-mechanics`. Stable by construction
-across reloads (layout must not thrash on ticks) and deep-linkable.
+A project's id is a slug of the folder basename plus a short hash of the
+canonical path (`foglight-3f2a`) — readable, unique, and stable across
+sessions so remembered maps and bookmarked URLs survive re-attach. Display
+name is the plain basename, disambiguated in the UI only on collision. The
+absolute path rides on the project toward the browser — the same audience
+already sees full map contents, and it is the honest disambiguator.
+
+Every `ResourceId` on the wire is **uniformly project-prefixed**:
+`<project-id>:<existing-id>`, e.g. `foglight-3f2a:local:.wayfinder/map.md`,
+`foglight-3f2a:github:owner/repo#42`. The first segment before the first
+`:` is always the project. Adapters stay project-blind: the session
+qualifies on the way out and strips on the way in. A resource means "this
+map *as seen through* this project": two checkouts of one GitHub repo are
+two resources. Aliasing identical GitHub maps across checkouts is deferred
+until it hurts.
+
+Qualified, human-readable ids remain stable by construction across reloads
+(layout must not thrash on ticks) and deep-linkable.
 
 Fog and out-of-scope entries key on a **slug from their bolded lead term**,
 with a content-hash fallback for non-conforming entries. **Convention this
@@ -239,11 +338,14 @@ case.
 - **SSE, not WebSocket** (the product is one-directional; `EventSource`
   auto-reconnect is free and proxies cleanly through `tailscale serve`).
   `@effect/experimental/Sse` has the encoder.
-- **One connection per tab, query-scoped:** `GET /api/events?map=<id>`,
-  carrying typed `maps` (descriptor list) and `map` (snapshot) events. The
-  subscriber set **is** the server's presence signal — client count and
-  foregrounded map read straight off it, feeding the poll cadence. Switching
-  maps reopens the stream with a new `map` param.
+- **One connection per tab, query-scoped:** `GET /api/events?map=<id>`
+  (or `/api/events` with no map, for the empty/picker state), carrying typed
+  `maps` (descriptor list), `projects` (complete project list), and `map`
+  (snapshot) events. The `projects` event fires on connect and again on
+  attach, detach, and live promotion — same "every event is a complete
+  truth" rule. The subscriber set **is** the server's presence signal —
+  client count and foregrounded map read straight off it, feeding the poll
+  cadence. Switching maps reopens the stream with a new `map` param.
 - **Full snapshot on every event, never a delta**, with a monotonic
   `revision`. Same shape as the initial GET: one decode path, one diff site
   (the client's `useSnapshotDiff`).
@@ -277,9 +379,10 @@ goes unmaintained: share the `Schema` definitions with a plain fetch client.
 - **Local-markdown: 300ms trailing debounce** (`Stream.debounce`). A torn read
   mid-rewrite shows as a malformed ticket and self-corrects on the next tick —
   do not suppress the warning.
-- **GitHub: ETag-conditional, adaptive, three-state** — open map **30s**,
-  picker-only **5 min**, **zero connected clients → paused**, immediate poll
-  on first connect. Exponential backoff to a 5-min ceiling on errors; honour
+- **GitHub: ETag-conditional, adaptive, per project** — a project whose map
+  is on screen is **active** (30s); other connected projects are **idle**
+  (5 min); **zero connected clients → paused**, immediate poll on first
+  connect. Exponential backoff to a 5-min ceiling on errors; honour
   `Retry-After`. (`304`s don't count against the 5000/hr budget; the pause
   rule is what makes a VPS left running for days cost nothing.)
 - **One snapshot per tick per map, `PubSub` fan-out, latest snapshot cached in
@@ -295,8 +398,8 @@ Covered structurally in §2 and §4; the policy decisions:
   v1 being read-only; the ADR names the revisit trigger — **any** write
   capability — and the first hedge to reach for (`--token` shared secret).
 - Default bind `127.0.0.1`; widening is explicit and bannered.
-- Anyone who can reach the port can read the whole map. On a private repo that
-  is genuine business intelligence; it is the accepted cost.
+- Anyone who can reach the port can read every attached project's maps. On a
+  private repo that is genuine business intelligence; it is the accepted cost.
 
 ## 8. The client: cockpit UI
 
@@ -392,33 +495,56 @@ branch are the regression checks.
 ### URLs
 
 **`/?map=<urlencoded id>&ticket=<urlencoded id>`** — query params, not path
-routes (map ids contain `#` and `/`), matching `GET /api/events?map=<id>`
-exactly. **No router library**: two search params read into state, no server
+routes (map ids contain `#`, `/`, and `:`), matching `GET /api/events?map=<id>`
+exactly. **No `?project=` param**: ids are project-qualified, so one opaque
+string still suffices and there are no expressible-but-invalid param pairs.
+**No router library**: two search params read into state, no server
 catch-all beside the static route. The `ticket` param selects a rail
 accordion — links get pasted, especially from headless. An explicit `?map`
 **always beats the remembered map**.
 
 ### The picker
 
-- A **rail-header popover** anchored on the current map's title, opened by
-  click or **`Cmd+K`** (not `Cmd+P` — it fights browser print, and
-  headless-in-a-browser is the common case).
-- **Always-visible substring filter** over title and destination, focused on
-  open.
-- Rows show title, truncated destination, decided/total. **No tracker badge**
-  (the tracker is uniform per repo; shown once in the rail header) and **no
-  frontier count** (§5).
-- **Ordered most-recently-changed first** (file mtime / GitHub `updated_at`),
-  ties alphabetical.
-- Liveness comes from the existing SSE connection's `maps` event — no second
-  subscription.
+- A **jump-pane dialog** (not a rail-header popover), opened by **`Cmd+K`**
+  (not `Cmd+P` — it fights browser print, and headless-in-a-browser is the
+  common case) or by clicking the rail's **named title switcher**. The
+  switcher shows the project name above the map title, with a caret; the
+  brand row still names the tracker. Header padding is the prototype's
+  "comfortable air".
+- **All-maps default.** A left project pane (dot, name, count) scopes a
+  right-hand flat list; unscoped rows carry the project as trailing
+  metadata. Typing searches **globally** (title, destination, project name)
+  and collapses the panes into one result list — scope only shapes
+  browsing. ←→ cycles scope while the query is empty. At one project the
+  pane disappears.
+- **Always-visible substring filter**, focused on open.
+- Rows show title, truncated destination, decided/total. **No tracker
+  badge** on rows (the tracker is uniform per project; shown once in the
+  rail header) and **no frontier count** (§5). Colliding project basenames
+  carry `path`.
+- **Ordered most-recently-changed first** (file mtime / GitHub
+  `updated_at`), ties alphabetical.
+- Degraded projects (`no-tracker`, `error`) stay in the pane and explain
+  themselves on the right when selected — they are not footer notes and they
+  do not drop out.
+- Liveness comes from the existing SSE connection's `maps` and `projects`
+  events — no second subscription.
 
 ### Opening and switching
 
-- **The last map is remembered in the browser** and reopened.
-- **Cold start** (no `?map`, nothing remembered, or a remembered id that no
-  longer exists): exactly one map → open it; more than one → the picker over
-  an empty cockpit; zero → an empty state explaining where a map should live.
+- **The last map is remembered in the browser** as its project-qualified
+  id, with enough display copy (title, project name) to name it while
+  detached.
+- An explicit `?map` **always beats the remembered map**.
+- If the remembered map's project is not attached, **keep the id** and wait
+  — never silently open a different project's map, even if only one other
+  map remains. The map reopens itself on re-attach.
+- **Cold start** (no `?map`, nothing remembered): exactly one reachable map
+  → open it (picker skipped, grouping hidden); more than one → the picker
+  over an empty cockpit; zero → an empty state explaining where a map
+  should live.
+- **Detach of the open map** cross-fades to the empty state, auto-opens the
+  picker, and names what is being remembered.
 - **Switching is a full replace:** clear `?ticket`, refit the viewport,
   rebuild the rail, **cross-fade**.
 

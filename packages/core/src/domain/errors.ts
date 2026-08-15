@@ -50,6 +50,12 @@ export class NoTrackerDetected extends Schema.TaggedError<NoTrackerDetected>()(
   HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
+/** attach() of a missing path or a path that is not a directory. */
+export class ProjectPathInvalid extends Schema.TaggedError<ProjectPathInvalid>()(
+  "ProjectPathInvalid",
+  { path: Schema.String, reason: Schema.String },
+) {}
+
 export type TrackerError =
   | MapNotFound
   | MapUnparseable

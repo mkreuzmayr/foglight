@@ -18,6 +18,28 @@ export type TicketStatus = typeof TicketStatus.Type;
 export const TrackerKind = Schema.Literal("local", "github");
 export type TrackerKind = typeof TrackerKind.Type;
 
+export const ProjectState = Schema.Literal("ready", "no-tracker", "error");
+export type ProjectState = typeof ProjectState.Type;
+
+/**
+ * A folder registered with the serve session (CONTEXT.md). `name` is the
+ * plain basename, disambiguated in the UI only on collision; `id` slugs it
+ * and hashes the canonical path.
+ */
+export class Project extends Schema.Class<Project>("Project")({
+  id: Schema.String,
+  name: Schema.String,
+  path: Schema.String,
+  state: ProjectState,
+  trackerKind: Schema.optional(TrackerKind),
+}) {}
+
+/** Enough to group a map without parsing its id. */
+export class ProjectRef extends Schema.Class<ProjectRef>("ProjectRef")({
+  id: Schema.String,
+  name: Schema.String,
+}) {}
+
 /**
  * Derived state, never stored. `frontier` and `claimed` are computed once here
  * in core from status/assignee/blockedBy — deliberately *not* read from
@@ -108,6 +130,8 @@ export class MapDescriptor extends Schema.Class<MapDescriptor>("MapDescriptor")(
   closedCount: Schema.Number,
   /** ordering key for the picker: most-recently-changed first (SPEC.md §9) */
   changedAt: Schema.String,
+  /** filled by the session layer; adapters stay project-blind */
+  project: Schema.optional(ProjectRef),
   // Deliberately no frontier count: it would force reading every ticket's
   // dependencies and undo the lightweight contract (SPEC.md §5).
 }) {}
@@ -132,6 +156,7 @@ export class MapSnapshot extends Schema.Class<MapSnapshot>("MapSnapshot")({
   outOfScope: Schema.Array(OutOfScopeNode),
   warnings: Schema.Array(MapWarning),
   readAt: Schema.String,
+  project: Schema.optional(ProjectRef),
 }) {}
 
 /** The prose half. Fetched per resource, cached under `(id, bodyHash)`. */

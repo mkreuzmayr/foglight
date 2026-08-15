@@ -1,22 +1,28 @@
 /**
  * The shell: which map is open, and what to show when none is.
  *
- * Cold start follows SPEC.md §9 exactly — an explicit `?map` always beats the
- * remembered map, one map opens itself, several open the picker over an empty
- * cockpit, and none is an empty state that says where a map should live.
- *
- * Every fatal tracker error gets its **own named state** here rather than a
- * generic failure screen: knowing that a map is unparseable, versus that the
- * tracker is unauthenticated, is most of the diagnosis.
+ * Cold start follows SPEC.md §9 and ticket 003: an explicit `?map` always
+ * beats the remembered map; a remembered id whose project has detached is
+ * kept and waited for; a session with exactly one reachable map and nothing
+ * remembered opens it outright. The picker is E's jump pane; live attach and
+ * detach arrive on the same SSE connection as everything else.
  */
-import { Lighthouse, Target, Warning } from "@phosphor-icons/react";
-import type { MapDescriptor, ResourceId } from "@foglight/core/domain";
+import { Lighthouse, Warning } from "@phosphor-icons/react";
+import type { MapDescriptor, Project, ResourceId } from "@foglight/core/domain";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Cockpit } from "@/components/Cockpit";
-import { mapsQuery, snapshotQuery } from "@/lib/api.js";
-import { rememberedMap, resolveInitialMap, useAddress } from "@/lib/address.js";
+import { MapPicker } from "@/components/MapPicker";
+import { mapsQuery, projectsQuery, snapshotQuery } from "@/lib/api.js";
+import {
+  rememberMap,
+  rememberedInfo,
+  rememberedMap,
+  resolveInitialMap,
+  useAddress,
+} from "@/lib/address.js";
+import { collidingNames, projectLabel } from "@/lib/picker.js";
 import { usePrefetchBodies } from "@/lib/bodies.js";
 import { newerOf, useLive } from "@/lib/live.js";
 
@@ -74,68 +80,83 @@ const FatalState = ({ error, mapId }: { error: unknown; mapId: ResourceId | null
   );
 };
 
-const EmptyState = () => (
-  <Shell>
-    <Lighthouse size={26} className="text-accent" />
-    <h1 className="t-title text-[15px] font-semibold text-ink">No maps here yet</h1>
-    <p className="max-w-md text-[12px] leading-relaxed text-ink-dim">
-      A wayfinder map lives at <span className="t-mono">.wayfinder/map.md</span>, or as an issue
-      labelled <span className="t-mono">wayfinder:map</span> on this repo's GitHub. Chart one with{" "}
-      <span className="t-mono">/wayfinder</span>, and it will appear here.
-    </p>
-  </Shell>
-);
-
-const PickerOnly = ({
-  maps,
-  onOpenMap,
+const EmptyState = ({
+  projects,
+  remembered,
+  onBrowse,
 }: {
-  maps: ReadonlyArray<MapDescriptor>;
-  onOpenMap: (id: ResourceId) => void;
-}) => (
-  <Shell>
-    <Target size={26} className="text-destination" />
-    <h1 className="t-title text-[15px] font-semibold text-ink">Which map?</h1>
-    <ul className="mt-2 w-full max-w-md overflow-hidden rounded-[var(--r-surface)] border border-hair">
-      {maps.map((map) => (
-        <li key={map.id} className="border-b border-hair/70 last:border-b-0">
-          <button
-            type="button"
-            onPointerDown={() => onOpenMap(map.id)}
-            className="flex w-full flex-col items-start gap-0.5 px-3.5 py-2.5 text-left hover:bg-panel-2"
-          >
-            <span className="t-title text-[12.5px] text-ink">{map.title}</span>
-            <span className="line-clamp-2 text-[10.5px] leading-snug text-ink-faint">
-              {map.destination}
-            </span>
-            <span className="t-mono mt-1 text-[10px] text-ink-faint">
-              {map.closedCount}/{map.closedCount + map.openCount} decided
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  </Shell>
-);
+  projects: ReadonlyArray<Project>;
+  remembered: { title: string; projectName: string } | null;
+  onBrowse: () => void;
+}) => {
+  const vacant = projects.length === 0 && remembered === null;
+  return (
+    <Shell>
+      <Lighthouse
+        size={26}
+        className={vacant ? "text-accent" : "text-ink-faint"}
+        weight={vacant ? "regular" : "thin"}
+      />
+      <h1 className="t-title text-[15px] font-semibold text-ink">
+        {vacant ? "No maps here yet" : "No map open"}
+      </h1>
+      {vacant ? (
+        <p className="max-w-md text-[12px] leading-relaxed text-ink-dim">
+          A wayfinder map lives at <span className="t-mono">.wayfinder/map.md</span>, or as an issue
+          labelled <span className="t-mono">wayfinder:map</span> on a project's GitHub. Chart one
+          with <span className="t-mono">/wayfinder</span>, then{" "}
+          <span className="t-mono">foglight serve</span> in that folder.
+        </p>
+      ) : (
+        <button
+          type="button"
+          onClick={onBrowse}
+          className="pressable mt-1 flex items-center gap-2 rounded-full bg-white/[0.07] px-4 py-1.5 text-[12px] text-ink ring-1 ring-white/10 hover:bg-white/[0.1]"
+        >
+          Browse maps
+          <kbd className="t-mono rounded border border-hair-bright px-1 py-px text-[9.5px] text-ink-faint">
+            ⌘K
+          </kbd>
+        </button>
+      )}
+      {remembered ? (
+        <p className="mt-2 max-w-[380px] text-[10.5px] leading-snug text-ink-faint">
+          Remembering “{remembered.title}” — it reopens if {remembered.projectName} re-attaches.
+        </p>
+      ) : null}
+    </Shell>
+  );
+};
 
 export const App = () => {
   const { address, selectTicket, openMap } = useAddress();
   const maps = useQuery(mapsQuery());
+  const projectsQueryResult = useQuery(projectsQuery());
+  const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Ordered most-recently-changed first, ties alphabetical (SPEC.md §9).
+  const projectList = useMemo(() => projectsQueryResult.data ?? [], [projectsQueryResult.data]);
+  const attached = useMemo(() => new Set(projectList.map((project) => project.id)), [projectList]);
+
+  // Ordered most-recently-changed first, ties alphabetical (SPEC.md §9). Drop
+  // descriptors whose project has already detached — the projects event can
+  // beat the maps tick by a beat.
   const choices = useMemo(() => {
-    const list = [...(maps.data ?? [])];
+    const list = [...(maps.data ?? [])].filter((map) => {
+      if (!projectsQueryResult.isSuccess || map.project === undefined) return true;
+      return attached.has(map.project.id);
+    });
     list.sort((a, b) =>
       a.changedAt === b.changedAt
         ? a.title.localeCompare(b.title)
         : b.changedAt.localeCompare(a.changedAt),
     );
     return list;
-  }, [maps.data]);
+  }, [maps.data, attached, projectsQueryResult.isSuccess]);
 
+  const rememberedId = rememberedMap();
   const openId = useMemo(
-    () => resolveInitialMap(address.map, rememberedMap(), choices),
-    [address.map, choices],
+    () => resolveInitialMap(address.map, rememberedId, choices),
+    [address.map, rememberedId, choices],
   );
 
   // Subscribe *first*, then GET — so a change landing between the two is
@@ -149,6 +170,20 @@ export const App = () => {
 
   usePrefetchBodies(snapshot);
 
+  const pickMap = (id: ResourceId) => {
+    const descriptor: MapDescriptor | undefined = choices.find(
+      (map) => String(map.id) === String(id),
+    );
+    const project = projectList.find((p) => p.id === descriptor?.project?.id);
+    openMap(
+      id,
+      descriptor === undefined
+        ? undefined
+        : { title: descriptor.title, projectName: project?.name ?? descriptor.project?.name ?? "" },
+    );
+    setPickerOpen(false);
+  };
+
   // Keep the URL honest once a map has actually been resolved, so the address
   // bar can always be copied and pasted.
   useEffect(() => {
@@ -157,7 +192,71 @@ export const App = () => {
     }
   }, [openId, address.map]);
 
+  // Refresh the remembered display payload while the map is open, so a later
+  // detach can name what it is waiting for.
+  useEffect(() => {
+    if (openId === null || snapshot === null) return;
+    const project = projectList.find((p) => p.id === snapshot.project?.id);
+    rememberMap(openId, {
+      title: snapshot.title,
+      projectName: project?.name ?? snapshot.project?.name ?? "",
+    });
+  }, [openId, snapshot, projectList]);
+
+  // ⌘K / Ctrl-K anywhere — including the empty state.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setPickerOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Auto-open the picker on cold start (several maps) and when the open map's
+  // project detaches. Close it when a map reopens itself. Never force it at n=1.
+  const prevOpenId = useRef<ResourceId | null | undefined>(undefined);
+  useEffect(() => {
+    if (maps.isPending) return;
+    if (openId !== null) {
+      if (prevOpenId.current === null) setPickerOpen(false);
+      prevOpenId.current = openId;
+      return;
+    }
+    if (prevOpenId.current) {
+      setPickerOpen(true);
+      prevOpenId.current = null;
+      return;
+    }
+    if (prevOpenId.current === undefined && choices.length > 1) {
+      setPickerOpen(true);
+    }
+    prevOpenId.current = null;
+  }, [openId, maps.isPending, choices.length]);
+
   const reduce = useReducedMotion();
+  const collisions = collidingNames(projectList);
+  const openProject = projectList.find((project) => project.id === snapshot?.project?.id);
+  const openLabel =
+    openProject === undefined
+      ? snapshot?.project === undefined
+        ? null
+        : { name: snapshot.project.name }
+      : projectLabel(openProject, collisions);
+  const waiting = openId === null ? rememberedInfo() : null;
+
+  const picker = (
+    <MapPicker
+      open={pickerOpen}
+      maps={choices}
+      projects={projectList}
+      current={openId}
+      onOpenMap={pickMap}
+      onClose={() => setPickerOpen(false)}
+    />
+  );
 
   if (maps.isPending) {
     return (
@@ -167,42 +266,62 @@ export const App = () => {
     );
   }
   if (maps.isError) return <FatalState error={maps.error} mapId={null} />;
-  if (choices.length === 0) return <EmptyState />;
-  if (openId === null) return <PickerOnly maps={choices} onOpenMap={openMap} />;
+
+  if (openId === null) {
+    return (
+      <div className="relative h-full">
+        <EmptyState
+          projects={projectList}
+          remembered={waiting}
+          onBrowse={() => setPickerOpen(true)}
+        />
+        {picker}
+      </div>
+    );
+  }
+
   if (snapshotFromGet.isError && snapshot === null) {
     return <FatalState error={snapshotFromGet.error} mapId={openId} />;
   }
   if (snapshot === null) {
     return (
-      <Shell>
-        <span className="text-[12px] text-ink-faint">Loading the map…</span>
-      </Shell>
+      <div className="relative h-full">
+        <Shell>
+          <span className="text-[12px] text-ink-faint">Loading the map…</span>
+        </Shell>
+        {picker}
+      </div>
     );
   }
 
   return (
     // Switching maps **cross-fades, never glides**: a different map is a
     // different subject, not a change to this one (SPEC.md §9).
-    <AnimatePresence mode="wait">
-      <motion.div
-        key={String(snapshot.id)}
-        className="h-full"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={reduce ? { duration: 0 } : { duration: 0.18 }}
-      >
-        <Cockpit
-          snapshot={snapshot}
-          maps={choices}
-          connection={live.connection}
-          stale={live.stale}
-          onRetry={live.retryNow}
-          selected={address.ticket}
-          onSelect={selectTicket}
-          onOpenMap={openMap}
-        />
-      </motion.div>
-    </AnimatePresence>
+    <div className="relative h-full">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={String(snapshot.id)}
+          className="h-full"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduce ? { duration: 0 } : { duration: 0.18 }}
+        >
+          <Cockpit
+            snapshot={snapshot}
+            projectName={openLabel?.name ?? null}
+            projectPath={openLabel?.disambiguator ?? openProject?.path ?? null}
+            pickerOpen={pickerOpen}
+            connection={live.connection}
+            stale={live.stale}
+            onRetry={live.retryNow}
+            selected={address.ticket}
+            onSelect={selectTicket}
+            onTogglePicker={() => setPickerOpen((open) => !open)}
+          />
+        </motion.div>
+      </AnimatePresence>
+      {picker}
+    </div>
   );
 };

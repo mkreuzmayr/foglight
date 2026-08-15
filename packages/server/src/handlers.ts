@@ -12,6 +12,7 @@ import { makeId, MapNotFound, TrackerUnreachable, type ResourceId } from "@fogli
 import { Effect, Layer } from "effect";
 import { FoglightApi } from "@foglight/core/api";
 import { MapStore } from "./store.js";
+import { ProjectSession } from "./session.js";
 
 const decodeId = (raw: string): ResourceId => makeId(decodeURIComponent(raw));
 
@@ -32,19 +33,27 @@ export const MapsHandlers = HttpApiBuilder.group(FoglightApi, "maps", (handlers)
     const fail = asTrackerError(store.adapter.kind);
 
     return handlers
-      .handle("list", () => store.adapter.listMaps().pipe(Effect.mapError(fail)))
+      .handle("list", () => store.listMaps.pipe(Effect.mapError(fail)))
       .handle("snapshot", ({ path }) =>
         store.snapshot(decodeId(path.id)).pipe(Effect.mapError(fail)),
       )
       .handle("body", ({ path }) =>
-        store.adapter.loadMapBody(decodeId(path.id)).pipe(Effect.mapError(fail)),
+        store.loadMapBody(decodeId(path.id)).pipe(Effect.mapError(fail)),
       )
       .handle("ticketBody", ({ path }) =>
-        store.adapter
-          .loadTicketBody(decodeId(path.id), decodeId(path.tid))
-          .pipe(Effect.mapError(fail)),
+        store.loadTicketBody(decodeId(path.id), decodeId(path.tid)).pipe(Effect.mapError(fail)),
       );
   }),
 );
 
-export const ApiLive = Layer.provide(HttpApiBuilder.api(FoglightApi), MapsHandlers);
+export const ProjectsHandlers = HttpApiBuilder.group(FoglightApi, "projects", (handlers) =>
+  Effect.gen(function* () {
+    const session = yield* ProjectSession;
+    return handlers.handle("list", () => session.list);
+  }),
+);
+
+export const ApiLive = Layer.provide(
+  HttpApiBuilder.api(FoglightApi),
+  Layer.merge(MapsHandlers, ProjectsHandlers),
+);

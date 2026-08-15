@@ -27,6 +27,26 @@ const main = async () => {
   });
 
   await page.goto(URL_BASE, { waitUntil: "networkidle" });
+  await page.waitForTimeout(800);
+
+  const picker = page.locator('[role="dialog"][aria-label="Map picker"]');
+  const pickerWasForced = (await picker.count()) === 1;
+  check(
+    "cold start with several maps opens the picker",
+    pickerWasForced || (await page.locator(".react-flow__node").count()) > 0,
+    pickerWasForced ? "picker" : "graph",
+  );
+
+  if (pickerWasForced) {
+    const search = picker.locator('input[aria-label="Search maps"]');
+    check(
+      "picker search is focused on open",
+      await search.evaluate((el) => el === document.activeElement),
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(500);
+  }
+
   await page.waitForSelector(".react-flow__node", { timeout: 15_000 });
   await page.waitForTimeout(1200);
 
@@ -48,6 +68,12 @@ const main = async () => {
 
   const rail = page.locator('aside[aria-label="Map index"]');
   check("rail is present", (await rail.count()) === 1);
+
+  // K's named switcher: the project sits inside the title control.
+  const switcher = rail.locator('button[aria-haspopup="dialog"]');
+  check("rail header is the map switcher", (await switcher.count()) === 1);
+  const switcherText = (await switcher.innerText()).toLowerCase();
+  check("rail header names the project", switcherText.length > 0, switcherText.slice(0, 80));
 
   // The rail filters through a segmented control, not accordions.
   const tabs = await rail.locator('[role="tab"]').allInnerTexts();
@@ -75,16 +101,23 @@ const main = async () => {
   check("destination is named in the rail", body.includes("destination"));
 
   // The picker is Cmd+K, not Cmd+P — Cmd+P fights browser print, and
-  // headless-in-a-browser is the common case.
+  // headless-in-a-browser is the common case. E's jump pane is a dialog.
   await page.keyboard.press("ControlOrMeta+k");
   await page.waitForTimeout(300);
-  const filter = page.locator('input[aria-label="Filter maps"]');
-  check("Cmd+K opens the picker", (await filter.count()) === 1);
+  check("Cmd+K opens the picker", (await picker.count()) === 1);
+  const filter = picker.locator('input[aria-label="Search maps"]');
   check(
-    "picker filter is focused on open",
+    "picker search is focused on open",
     await filter.evaluate((el) => el === document.activeElement),
   );
+
+  // n=1 project: the left pane (All maps) is grouping, so it hides.
+  const allMaps = picker.getByText("All maps", { exact: true });
+  check("grouping pane hides at one project", (await allMaps.count()) === 0);
+
   await page.keyboard.press("Escape");
+  await page.waitForTimeout(400);
+  check("Escape closes the picker", (await picker.count()) === 0);
 
   // Selecting a ticket opens its detail *inside the rail* — never a modal.
   await rail.getByRole("tab", { name: "Decided" }).click();

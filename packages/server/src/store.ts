@@ -14,8 +14,26 @@
  *     GitHub polling outright, which is what makes a VPS left running for days
  *     cost nothing
  */
-import type { TrackerAdapter, MapDescriptor, MapSnapshot, ResourceId } from "@foglight/core";
-import { MapSnapshot as Snapshot } from "@foglight/core";
+import type {
+  TrackerAdapter,
+  MapDescriptor,
+  MapSnapshot,
+  Project,
+  ResourceId,
+} from "@foglight/core";
+import {
+  MapNotFound,
+  MapSnapshot as Snapshot,
+  MapDescriptor as Descriptor,
+  ProjectRef,
+  qualify,
+  makeId,
+  TicketNode,
+  FogNode,
+  OutOfScopeNode,
+  MapWarning,
+  Body,
+} from "@foglight/core";
 import type { PollMode } from "@foglight/core";
 import { Context, Duration, Effect, Layer, PubSub, Ref, Stream, SubscriptionRef } from "effect";
 
@@ -24,13 +42,20 @@ const LOCAL_DEBOUNCE = Duration.millis(300);
 
 export type ServerEvent =
   | { readonly _tag: "maps"; readonly maps: ReadonlyArray<MapDescriptor> }
-  | { readonly _tag: "map"; readonly snapshot: MapSnapshot };
+  | { readonly _tag: "map"; readonly snapshot: MapSnapshot }
+  | { readonly _tag: "projects"; readonly projects: ReadonlyArray<Project> };
 
 export type MapStoreService = {
   /** The picker's list. Cached, refreshed on every tick. */
   readonly descriptors: Effect.Effect<ReadonlyArray<MapDescriptor>>;
+  readonly listMaps: Effect.Effect<ReadonlyArray<MapDescriptor>, unknown>;
   /** The latest snapshot, served from cache when one is held. */
   readonly snapshot: (id: ResourceId) => Effect.Effect<MapSnapshot, unknown>;
+  readonly loadMapBody: (id: ResourceId) => ReturnType<TrackerAdapter["loadMapBody"]>;
+  readonly loadTicketBody: (
+    mapId: ResourceId,
+    ticketId: ResourceId,
+  ) => ReturnType<TrackerAdapter["loadTicketBody"]>;
   /**
    * One query-scoped subscription per tab. Yields the current truth first,
    * then every later one — so a client can subscribe *before* it GETs and
@@ -38,6 +63,13 @@ export type MapStoreService = {
    */
   readonly subscribe: (id: ResourceId | null) => Stream.Stream<ServerEvent>;
   readonly adapter: TrackerAdapter;
+  readonly add: (source: {
+    readonly adapter: TrackerAdapter;
+    readonly project: { readonly id: string; readonly name: string };
+    readonly cadence: SubscriptionRef.SubscriptionRef<PollMode>;
+  }) => Effect.Effect<void>;
+  readonly remove: (projectId: string) => Effect.Effect<void>;
+  readonly announceProjects: (projects: ReadonlyArray<Project>) => Effect.Effect<void>;
 };
 
 export class MapStore extends Context.Tag("@foglight/server/MapStore")<
@@ -48,6 +80,7 @@ export class MapStore extends Context.Tag("@foglight/server/MapStore")<
 export const layer = (
   adapter: TrackerAdapter,
   cadence: SubscriptionRef.SubscriptionRef<PollMode>,
+  project: { readonly id: string; readonly name: string } | null = null,
 ): Layer.Layer<MapStore> =>
   Layer.scoped(
     MapStore,
@@ -59,32 +92,123 @@ export const layer = (
       const watchers = yield* Ref.make(new Map<string, number>());
       const events = yield* PubSub.sliding<ServerEvent>(64);
 
+      type Source = {
+        readonly adapter: TrackerAdapter;
+        readonly project: { readonly id: string; readonly name: string };
+        readonly cadence: SubscriptionRef.SubscriptionRef<PollMode>;
+      };
+      const sources = yield* Ref.make<ReadonlyArray<Source>>(
+        project === null ? [] : [{ adapter, project, cadence }],
+      );
+
+      const qualifyFor = (
+        owner: { readonly id: string; readonly name: string },
+        maps: ReadonlyArray<MapDescriptor>,
+      ): ReadonlyArray<MapDescriptor> => {
+        const ref = new ProjectRef({ id: owner.id, name: owner.name });
+        return maps.map(
+          (descriptor) =>
+            new Descriptor({
+              ...descriptor,
+              id: qualify(owner.id, String(descriptor.id)),
+              project: ref,
+            }),
+        );
+      };
+
+      const sourceFor = (id: ResourceId) =>
+        Effect.gen(function* () {
+          const ss = yield* Ref.get(sources);
+          const raw = String(id);
+          return ss.find((s) => raw.startsWith(`${s.project.id}:`));
+        });
+
+      const toAdapter = (id: ResourceId, owner: { readonly id: string }): ResourceId => {
+        const prefix = `${owner.id}:`;
+        const raw = String(id);
+        return raw.startsWith(prefix) ? makeId(raw.slice(prefix.length)) : id;
+      };
+
+      const qualifyId = (ownerId: string, id: ResourceId): ResourceId =>
+        qualify(ownerId, String(id));
+
+      const qualifySnapshot = (
+        owner: { readonly id: string; readonly name: string },
+        loaded: MapSnapshot,
+        next: number,
+      ): MapSnapshot =>
+        new Snapshot({
+          ...loaded,
+          id: qualifyId(owner.id, loaded.id),
+          project: new ProjectRef({ id: owner.id, name: owner.name }),
+          revision: next,
+          tickets: loaded.tickets.map(
+            (ticket) =>
+              new TicketNode({
+                ...ticket,
+                id: qualifyId(owner.id, ticket.id),
+                ...(ticket.graduatedFrom === undefined
+                  ? {}
+                  : { graduatedFrom: qualifyId(owner.id, ticket.graduatedFrom) }),
+              }),
+          ),
+          fog: loaded.fog.map(
+            (entry) => new FogNode({ ...entry, id: qualifyId(owner.id, entry.id) }),
+          ),
+          outOfScope: loaded.outOfScope.map(
+            (entry) => new OutOfScopeNode({ ...entry, id: qualifyId(owner.id, entry.id) }),
+          ),
+          warnings: loaded.warnings.map(
+            (warning) =>
+              new MapWarning({
+                ...warning,
+                subject: warning.subject === null ? null : qualifyId(owner.id, warning.subject),
+              }),
+          ),
+        });
+
       /**
-       * The cadence is read off presence, never configured: a map on screen is
-       * worth 30s, a picker-only client 5 min, nobody at all nothing.
+       * Presence is per project: a map on screen is worth 30s for *that*
+       * project, any connected client keeps the others idle, and nobody at
+       * all pauses every GitHub poller.
        */
       const syncCadence = Effect.gen(function* () {
         const live = yield* Ref.get(watchers);
-        const total = [...live.values()].reduce((a, b) => a + b, 0);
-        const onAMap = [...live.entries()].some(([id, n]) => id !== "" && n > 0);
-        yield* SubscriptionRef.set(cadence, total === 0 ? "paused" : onAMap ? "active" : "idle");
+        const ss = yield* Ref.get(sources);
+        const anyClient = [...live.values()].some((n) => n > 0);
+        yield* Effect.forEach(ss, (source) => {
+          const onAMap = [...live.entries()].some(
+            ([id, n]) => n > 0 && id.startsWith(`${source.project.id}:`),
+          );
+          const mode = onAMap ? "active" : anyClient ? "idle" : "paused";
+          return SubscriptionRef.set(source.cadence, mode);
+        });
       });
 
-      const readDescriptors = adapter.listMaps().pipe(
-        Effect.tap((maps) => Ref.set(descriptorCache, maps)),
-        // Degrade, don't fail: the picker keeps its last good list rather than
-        // taking the whole page down with it.
-        Effect.catchAll(() => Ref.get(descriptorCache)),
-      );
+      const readDescriptors = Effect.gen(function* () {
+        const ss = yield* Ref.get(sources);
+        const chunks = yield* Effect.forEach(
+          ss,
+          (s) =>
+            s.adapter.listMaps().pipe(
+              Effect.map((maps) => qualifyFor(s.project, maps)),
+              Effect.catchAll(() => Effect.succeed<ReadonlyArray<MapDescriptor>>([])),
+            ),
+          { concurrency: 4 },
+        );
+        const maps = chunks.flat();
+        yield* Ref.set(descriptorCache, maps);
+        return maps;
+      });
 
       const readSnapshot = (id: ResourceId) =>
         Effect.gen(function* () {
-          const loaded = yield* adapter.loadMap(id);
-          // The adapter has no business inventing a revision — ordering is a
-          // property of this server's stream, not of the tracker.
+          const source = yield* sourceFor(id);
+          if (source === undefined) return yield* new MapNotFound({ id: String(id) });
+          const loaded = yield* source.adapter.loadMap(toAdapter(id, source.project));
           const next = yield* Ref.updateAndGet(revision, (n) => n + 1);
-          const stamped = new Snapshot({ ...loaded, revision: next });
-          yield* Ref.update(snapshots, (m) => new Map(m).set(String(id), stamped));
+          const stamped = qualifySnapshot(source.project, loaded, next);
+          yield* Ref.update(snapshots, (m) => new Map(m).set(String(stamped.id), stamped));
           return stamped;
         });
 
@@ -118,11 +242,34 @@ export const layer = (
         );
       });
 
-      yield* adapter.changes().pipe(
-        Stream.debounce(LOCAL_DEBOUNCE),
-        Stream.runForEach(() => onTick),
-        Effect.forkScoped,
+      yield* Effect.forEach(yield* Ref.get(sources), (source) =>
+        source.adapter.changes().pipe(
+          Stream.debounce(LOCAL_DEBOUNCE),
+          Stream.runForEach(() => onTick),
+          Effect.forkDaemon,
+        ),
       );
+
+      const add = (source: Source) =>
+        Effect.gen(function* () {
+          const ss = yield* Ref.get(sources);
+          if (ss.some((s) => s.project.id === source.project.id)) return;
+          yield* Ref.set(sources, [...ss, source]);
+          yield* source.adapter.changes().pipe(
+            Stream.debounce(LOCAL_DEBOUNCE),
+            Stream.runForEach(() => onTick),
+            Effect.forkDaemon,
+          );
+          yield* syncCadence;
+        });
+
+      const remove = (projectId: string) =>
+        Ref.update(sources, (ss) => ss.filter((s) => s.project.id !== projectId)).pipe(
+          Effect.zipRight(syncCadence),
+        );
+
+      const announceProjects = (projects: ReadonlyArray<Project>) =>
+        PubSub.publish(events, { _tag: "projects", projects });
 
       const subscribe = (id: ResourceId | null): Stream.Stream<ServerEvent> => {
         const key = id === null ? "" : String(id);
@@ -169,7 +316,10 @@ export const layer = (
               Stream.fromPubSub(events).pipe(
                 // A tab is scoped to one map: another map's snapshot is noise.
                 Stream.filter(
-                  (event) => event._tag === "maps" || String(event.snapshot.id) === key,
+                  (event) =>
+                    event._tag === "maps" ||
+                    event._tag === "projects" ||
+                    String(event.snapshot.id) === key,
                 ),
               ),
             ),
@@ -183,9 +333,47 @@ export const layer = (
             cached.length > 0 ? Effect.succeed(cached) : readDescriptors,
           ),
         ),
+        listMaps: readDescriptors,
         snapshot,
+        loadMapBody: (id) =>
+          Effect.gen(function* () {
+            const source = yield* sourceFor(id);
+            if (source === undefined) return yield* new MapNotFound({ id: String(id) });
+            const body = yield* source.adapter.loadMapBody(toAdapter(id, source.project));
+            return new Body({ ...body, id: qualifyId(source.project.id, body.id) });
+          }),
+        loadTicketBody: (mapId, ticketId) =>
+          Effect.gen(function* () {
+            const source = yield* sourceFor(mapId);
+            if (source === undefined) return yield* new MapNotFound({ id: String(mapId) });
+            const body = yield* source.adapter.loadTicketBody(
+              toAdapter(mapId, source.project),
+              toAdapter(ticketId, source.project),
+            );
+            return new Body({ ...body, id: qualifyId(source.project.id, body.id) });
+          }),
         subscribe,
         adapter,
+        add,
+        remove,
+        announceProjects,
       } satisfies MapStoreService;
     }),
   );
+
+const emptyAdapter: TrackerAdapter = {
+  kind: "local",
+  label: "",
+  listMaps: () => Effect.succeed([]),
+  loadMap: (id) => new MapNotFound({ id: String(id) }),
+  loadMapBody: (id) => new MapNotFound({ id: String(id) }),
+  loadTicketBody: (_mapId, ticketId) => new MapNotFound({ id: String(ticketId) }),
+  changes: () => Stream.empty,
+};
+
+/** A session with no attached project: no maps, no change ticks. */
+export const empty: Layer.Layer<MapStore> = Layer.unwrapEffect(
+  SubscriptionRef.make<PollMode>("paused").pipe(
+    Effect.map((cadence) => layer(emptyAdapter, cadence)),
+  ),
+);

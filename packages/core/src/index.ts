@@ -1,4 +1,5 @@
 export * from "./domain/model.js";
+export * from "./domain/project.js";
 export * from "./api/index.js";
 export * from "./domain/derive.js";
 export * from "./domain/errors.js";

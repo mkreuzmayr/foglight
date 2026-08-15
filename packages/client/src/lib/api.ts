@@ -19,7 +19,7 @@
  */
 import { FetchHttpClient, HttpApiClient } from "@effect/platform";
 import { FoglightApi } from "@foglight/core/api";
-import type { Body, MapDescriptor, MapSnapshot, ResourceId } from "@foglight/core/domain";
+import type { Body, MapDescriptor, MapSnapshot, Project, ResourceId } from "@foglight/core/domain";
 import { QueryClient } from "@tanstack/react-query";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { createEffectQueryFromManagedRuntime } from "effect-query";
@@ -52,6 +52,7 @@ export const queryClient = new QueryClient({
 
 export const keys = {
   maps: ["maps"] as const,
+  projects: ["projects"] as const,
   snapshot: (id: ResourceId) => ["map", id] as const,
   /**
    * Bodies key on `(id, bodyHash)` — **the hash is the staleness rule, not a
@@ -67,6 +68,12 @@ export const mapsQuery = () =>
   queryOptions({
     queryKey: keys.maps,
     queryFn: () => Effect.flatMap(Api, (api) => api.maps.list()),
+  });
+
+export const projectsQuery = () =>
+  queryOptions({
+    queryKey: keys.projects,
+    queryFn: () => Effect.flatMap(Api, (api) => api.projects.list()),
   });
 
 export const snapshotQuery = (id: ResourceId) =>
@@ -94,4 +101,4 @@ export const ticketBodyQuery = (mapId: ResourceId, ticketId: ResourceId, hash: s
       ),
   });
 
-export type { Body, MapDescriptor, MapSnapshot };
+export type { Body, MapDescriptor, MapSnapshot, Project };

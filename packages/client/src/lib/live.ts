@@ -9,7 +9,7 @@
  * experimental, and a query stays `fetching` until the stream *ends*, which
  * for a perpetual feed is never).
  */
-import type { MapDescriptor, MapSnapshot, ResourceId } from "@foglight/core/domain";
+import type { MapDescriptor, MapSnapshot, Project, ResourceId } from "@foglight/core/domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { keys } from "./api.js";
@@ -21,6 +21,7 @@ export type Live = {
   readonly connection: ConnectionState;
   readonly snapshot: MapSnapshot | null;
   readonly maps: ReadonlyArray<MapDescriptor> | null;
+  readonly projects: ReadonlyArray<Project> | null;
   /** true once a snapshot has been superseded by a failed connection */
   readonly stale: boolean;
   readonly retryNow: () => void;
@@ -34,6 +35,7 @@ export const useLive = (mapId: ResourceId | null): Live => {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [snapshot, setSnapshot] = useState<MapSnapshot | null>(null);
   const [maps, setMaps] = useState<ReadonlyArray<MapDescriptor> | null>(null);
+  const [projects, setProjects] = useState<ReadonlyArray<Project> | null>(null);
   const [nonce, setNonce] = useState(0);
   const failures = useRef(0);
   /**
@@ -62,6 +64,18 @@ export const useLive = (mapId: ResourceId | null): Live => {
       queryClient.setQueryData(keys.maps, next);
     };
 
+    const onProjects = (event: MessageEvent<string>) => {
+      failures.current = 0;
+      setConnection("live");
+      const next = (JSON.parse(event.data) as { projects: ReadonlyArray<Project> }).projects;
+      setProjects(next);
+      queryClient.setQueryData(keys.projects, next);
+      // Attach/detach is a complete new project list; maps follow on their own
+      // event, but invalidate so a GET cannot linger on a detached project's
+      // descriptors if the maps tick is a beat behind.
+      void queryClient.invalidateQueries({ queryKey: keys.maps });
+    };
+
     const onMap = (event: MessageEvent<string>) => {
       failures.current = 0;
       setConnection("live");
@@ -84,12 +98,14 @@ export const useLive = (mapId: ResourceId | null): Live => {
     };
 
     source.addEventListener("maps", onMaps as EventListener);
+    source.addEventListener("projects", onProjects as EventListener);
     source.addEventListener("map", onMap as EventListener);
     source.addEventListener("open", onOpen);
     source.addEventListener("error", onError);
 
     return () => {
       source.removeEventListener("maps", onMaps as EventListener);
+      source.removeEventListener("projects", onProjects as EventListener);
       source.removeEventListener("map", onMap as EventListener);
       source.removeEventListener("open", onOpen);
       source.removeEventListener("error", onError);
@@ -101,6 +117,7 @@ export const useLive = (mapId: ResourceId | null): Live => {
     connection,
     snapshot,
     maps,
+    projects,
     stale: snapshot !== null && connection !== "live" && connection !== "connecting",
     // "Retry now" beside the automatic backoff: a person who knows the network
     // came back should not have to wait out a timer.

@@ -282,13 +282,15 @@ const Row = ({
 
 export type CockpitProps = {
   snapshot: MapSnapshot;
-  maps: ReadonlyArray<{ id: ResourceId; title: string; destination: string }>;
+  projectName: string | null;
+  projectPath: string | null;
+  pickerOpen: boolean;
   connection: ConnectionState;
   stale: boolean;
   onRetry: () => void;
   selected: ResourceId | null;
   onSelect: (id: ResourceId | null) => void;
-  onOpenMap: (id: ResourceId) => void;
+  onTogglePicker: () => void;
 };
 
 const Inner = (props: CockpitProps) => {
@@ -427,15 +429,17 @@ const Inner = (props: CockpitProps) => {
       >
         <RailHeader
           snapshot={snapshot}
-          maps={props.maps}
+          projectName={props.projectName}
+          projectPath={props.projectPath}
+          pickerOpen={props.pickerOpen}
           connection={props.connection}
           stale={props.stale}
           onRetry={props.onRetry}
-          onOpenMap={props.onOpenMap}
+          onTogglePicker={props.onTogglePicker}
         />
 
-        <div className="px-4 pb-3">
-          <div className="flex items-center gap-3">
+        <div className="px-5 pb-4">
+          <div className="mt-4 flex items-center gap-3.5">
             <Ring closed={p.closed} total={p.total} />
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
@@ -445,7 +449,7 @@ const Inner = (props: CockpitProps) => {
                 </span>
               </div>
               <p
-                className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-ink-dim"
+                className="mt-1 line-clamp-2 text-[11px] leading-snug text-ink-dim"
                 title={snapshot.destination}
               >
                 {snapshot.destination}
@@ -456,7 +460,7 @@ const Inner = (props: CockpitProps) => {
           <div
             role="tablist"
             aria-label="Filter tickets"
-            className="mt-3.5 flex rounded-full bg-white/[0.05] p-[3px] ring-1 ring-white/[0.07]"
+            className="mt-4.5 flex rounded-full bg-white/[0.05] p-[3px] ring-1 ring-white/[0.07]"
           >
             {SEGMENTS.map((s) => (
               <button

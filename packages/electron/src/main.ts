@@ -28,12 +28,11 @@ const WINDOW = { width: 1440, height: 900, minWidth: 880, minHeight: 560 };
 export const runGui = async (options: GuiOptions): Promise<void> => {
   const runtime = ManagedRuntime.make(
     AppLayer({
-      repoRoot: options.repoRoot,
+      initialProject: { path: options.repoRoot, tracker: options.tracker },
       host: "127.0.0.1",
       // The GUI takes whatever port the OS gives it and accepts no --port
       // flag: nothing outside this process ever needs to name it.
       port: 0,
-      tracker: options.tracker,
       clientDir: options.clientDir,
     }),
   );

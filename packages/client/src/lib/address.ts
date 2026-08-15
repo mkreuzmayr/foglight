@@ -17,6 +17,11 @@ const REMEMBERED = "foglight:last-map";
 
 export type Address = { map: ResourceId | null; ticket: ResourceId | null };
 
+/** Displayable memory of a map whose project has detached. */
+export type RememberedInfo = { title: string; projectName: string };
+
+type StoredRemembered = { id: ResourceId } & RememberedInfo;
+
 const read = (): Address => {
   const params = new URLSearchParams(window.location.search);
   const map = params.get("map");
@@ -27,18 +32,45 @@ const read = (): Address => {
   };
 };
 
-export const rememberedMap = (): ResourceId | null => {
+const readRemembered = (): StoredRemembered | null => {
   try {
-    const stored = window.localStorage.getItem(REMEMBERED);
-    return stored === null || stored === "" ? null : (stored as ResourceId);
+    const raw = window.localStorage.getItem(REMEMBERED);
+    if (raw === null || raw === "") return null;
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw) as { id?: unknown; title?: unknown; projectName?: unknown };
+      if (typeof parsed.id === "string" && parsed.id !== "") {
+        return {
+          id: parsed.id as ResourceId,
+          title: typeof parsed.title === "string" ? parsed.title : "",
+          projectName: typeof parsed.projectName === "string" ? parsed.projectName : "",
+        };
+      }
+      return null;
+    }
+    return { id: raw as ResourceId, title: "", projectName: "" };
   } catch {
     return null; // private mode, or storage disabled — not worth failing over
   }
 };
 
-export const rememberMap = (id: ResourceId): void => {
+export const rememberedMap = (): ResourceId | null => readRemembered()?.id ?? null;
+
+export const rememberedInfo = (): RememberedInfo | null => {
+  const stored = readRemembered();
+  if (stored === null || stored.title === "") return null;
+  return { title: stored.title, projectName: stored.projectName };
+};
+
+export const rememberMap = (id: ResourceId, info?: RememberedInfo): void => {
   try {
-    window.localStorage.setItem(REMEMBERED, String(id));
+    const previous = readRemembered();
+    const same = previous?.id === id;
+    const payload: StoredRemembered = {
+      id,
+      title: info?.title || (same ? previous.title : "") || "",
+      projectName: info?.projectName || (same ? previous.projectName : "") || "",
+    };
+    window.localStorage.setItem(REMEMBERED, JSON.stringify(payload));
   } catch {
     /* see above */
   }
@@ -73,8 +105,8 @@ export const useAddress = () => {
   );
 
   const openMap = useCallback(
-    (map: ResourceId) => {
-      rememberMap(map);
+    (map: ResourceId, info?: RememberedInfo) => {
+      rememberMap(map, info);
       // Switching is a full replace — the old `?ticket` means nothing here.
       write({ map, ticket: null });
     },
@@ -85,10 +117,11 @@ export const useAddress = () => {
 };
 
 /**
- * Cold start (SPEC.md §9): an explicit `?map` **always** beats the remembered
- * map — a pasted link must land where it points. Otherwise the remembered map
- * if it still exists, otherwise the only map if there is exactly one, and
- * otherwise nothing, which opens the picker.
+ * Cold start (SPEC.md §9, ticket 003): an explicit `?map` **always** beats
+ * the remembered map — a pasted link must land where it points. Otherwise the
+ * remembered map if it is still attached. A remembered id whose project has
+ * detached is *kept* and waited for — never replaced by a different project's
+ * map. Only when nothing is remembered does a sole reachable map open itself.
  */
 export const resolveInitialMap = (
   explicit: ResourceId | null,
@@ -100,5 +133,8 @@ export const resolveInitialMap = (
 
   if (exists(explicit)) return explicit;
   if (exists(remembered)) return remembered;
+  // A remembered id whose project isn't attached: wait for re-attach.
+  // Never silently open a different project's map (ticket 003).
+  if (remembered !== null) return null;
   return available.length === 1 ? (available[0]?.id ?? null) : null;
 };

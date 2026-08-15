@@ -23,9 +23,19 @@ export type Command =
       readonly tailscale: boolean;
       readonly tailscaleServe: boolean;
       readonly tailscaleServePort: number;
+      readonly verbose: boolean;
     }
   | { readonly kind: "help" }
   | { readonly kind: "version" }
+  | { readonly kind: "status" }
+  | {
+      readonly kind: "daemon";
+      readonly host: string;
+      readonly port: number;
+      readonly tailscale: boolean;
+      readonly tailscaleServe: boolean;
+      readonly tailscaleServePort: number;
+    }
   | { readonly kind: "error"; readonly message: string };
 
 export const DEFAULT_PORT = 4747;
@@ -35,6 +45,7 @@ export const HELP = `foglight — a read-only viewer for wayfinder maps
 
   foglight [path]           open the desktop window on the repo at <path> (default: cwd)
   foglight serve [path]     serve headless, for a browser on this machine or a tailnet
+  foglight status           print the live session (pid, url, projects), or "no session"
 
 Options for serve:
   --port <n>                port to bind (default: ${DEFAULT_PORT}); a collision fails, it does not move
@@ -42,6 +53,7 @@ Options for serve:
   --tailscale               bind the tailnet address from \`tailscale ip -4\`
   --tailscale-serve         let Tailscale terminate HTTPS and give a MagicDNS URL
   --tailscale-serve-port <n>  the local port Tailscale forwards to (default: the served port)
+  --verbose                 stream the daemon log to this terminal
 
 Options for both:
   --tracker local|github    force the tracker instead of detecting it
@@ -64,8 +76,11 @@ export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => 
   if (args.includes("-h") || args.includes("--help")) return { kind: "help" };
   if (args.includes("-v") || args.includes("--version")) return { kind: "version" };
 
+  if (args[0] === "status") return { kind: "status" };
+
   const serve = args[0] === "serve";
-  const rest = serve ? args.slice(1) : args;
+  const daemon = args[0] === "daemon";
+  const rest = serve || daemon ? args.slice(1) : args;
 
   let repoRoot = cwd;
   let tracker: TrackerChoice = null;
@@ -74,6 +89,7 @@ export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => 
   let tailscale = false;
   let tailscaleServe = false;
   let tailscaleServePort = 0;
+  let verbose = false;
 
   try {
     for (let i = 0; i < rest.length; i += 1) {
@@ -107,6 +123,9 @@ export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => 
           tailscaleServePort = Number(takeValue(rest, i, "--tailscale-serve-port"));
           i += 1;
           break;
+        case "--verbose":
+          verbose = true;
+          break;
         default:
           if (arg.startsWith("-")) return { kind: "error", message: `unknown option ${arg}` };
           repoRoot = arg;
@@ -120,11 +139,27 @@ export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => 
     return { kind: "error", message: `--port must be a port number, not "${port}"` };
   }
 
+  if (daemon) {
+    return {
+      kind: "daemon",
+      host,
+      port,
+      tailscale,
+      tailscaleServe,
+      tailscaleServePort: tailscaleServePort === 0 ? port : tailscaleServePort,
+    };
+  }
+
   if (!serve) {
     const guiOnly = rest.find((a) =>
-      ["--port", "--host", "--tailscale", "--tailscale-serve", "--tailscale-serve-port"].includes(
-        a,
-      ),
+      [
+        "--port",
+        "--host",
+        "--tailscale",
+        "--tailscale-serve",
+        "--tailscale-serve-port",
+        "--verbose",
+      ].includes(a),
     );
     if (guiOnly !== undefined) {
       return {
@@ -147,5 +182,6 @@ export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => 
     tailscale,
     tailscaleServe,
     tailscaleServePort: tailscaleServePort === 0 ? port : tailscaleServePort,
+    verbose,
   };
 };

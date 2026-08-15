@@ -142,6 +142,16 @@ describe("cold start", () => {
     expect(resolveInitialMap(null, id("gone"), available)).toBeNull();
   });
 
+  it("does not silently open a different project's sole remaining map", () => {
+    // The remembered project's attacher left: wait for re-attach rather than
+    // substituting a stranger, even when only one other map is reachable.
+    expect(resolveInitialMap(null, id("gone"), [{ id: id("stranger") }])).toBeNull();
+  });
+
+  it("reopens the remembered map once its project is attached again", () => {
+    expect(resolveInitialMap(null, id("gone"), [{ id: id("gone") }])).toBe("gone");
+  });
+
   it("opens the only map without asking", () => {
     expect(resolveInitialMap(null, null, [{ id: id("only") }])).toBe("only");
   });

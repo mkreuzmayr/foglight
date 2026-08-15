@@ -13,18 +13,30 @@ import { Sse } from "@effect/experimental";
 import { makeId } from "@foglight/core";
 import { Duration, Effect, Schedule, Stream } from "effect";
 import { MapStore, type ServerEvent } from "./store.js";
+import { ProjectSession } from "./session.js";
 
 /** Comment frames keep proxies and `tailscale serve` from reaping an idle stream. */
 const PING_INTERVAL = Duration.seconds(20);
 /** Told to the browser explicitly rather than left to `EventSource`'s default. */
 const RETRY_MS = 2000;
 
+const payload = (event: ServerEvent): unknown => {
+  switch (event._tag) {
+    case "maps":
+      return { maps: event.maps };
+    case "projects":
+      return { projects: event.projects };
+    case "map":
+      return event.snapshot;
+  }
+};
+
 const frame = (event: ServerEvent): string =>
   Sse.encoder.write({
     _tag: "Event",
     event: event._tag,
     id: event._tag === "map" ? String(event.snapshot.revision) : undefined,
-    data: JSON.stringify(event._tag === "maps" ? { maps: event.maps } : event.snapshot),
+    data: JSON.stringify(payload(event)),
   });
 
 /**
@@ -37,6 +49,7 @@ const frame = (event: ServerEvent): string =>
  */
 const events = Effect.gen(function* () {
   const store = yield* MapStore;
+  const session = yield* ProjectSession;
   const request = yield* HttpServerRequest.HttpServerRequest;
   const params = new URL(request.url, "http://localhost").searchParams;
   const raw = params.get("map");
@@ -44,9 +57,14 @@ const events = Effect.gen(function* () {
 
   const body = Stream.concat(
     Stream.succeed(`retry: ${RETRY_MS}\n\n`),
-    Stream.merge(
-      store.subscribe(mapId).pipe(Stream.map(frame)),
-      Stream.repeatValue(": ping\n\n").pipe(Stream.schedule(Schedule.spaced(PING_INTERVAL))),
+    Stream.concat(
+      Stream.fromEffect(
+        session.list.pipe(Effect.map((projects) => frame({ _tag: "projects", projects }))),
+      ),
+      Stream.merge(
+        store.subscribe(mapId).pipe(Stream.map(frame)),
+        Stream.repeatValue(": ping\n\n").pipe(Stream.schedule(Schedule.spaced(PING_INTERVAL))),
+      ),
     ),
   ).pipe(Stream.encodeText);
 

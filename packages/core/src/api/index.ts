@@ -17,7 +17,7 @@
  * batched.
  */
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "@effect/platform";
-import { Body, MapDescriptor, MapSnapshot } from "../domain/model.js";
+import { Body, MapDescriptor, MapSnapshot, Project } from "../domain/model.js";
 import {
   MapNotFound,
   MapUnparseable,
@@ -73,4 +73,8 @@ export class MapsGroup extends HttpApiGroup.make("maps")
   )
   .prefix("/api") {}
 
-export class FoglightApi extends HttpApi.make("foglight").add(MapsGroup) {}
+export class ProjectsGroup extends HttpApiGroup.make("projects")
+  .add(HttpApiEndpoint.get("list", "/projects").addSuccess(Schema.Array(Project)))
+  .prefix("/api") {}
+
+export class FoglightApi extends HttpApi.make("foglight").add(MapsGroup).add(ProjectsGroup) {}

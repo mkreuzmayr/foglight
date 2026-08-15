@@ -130,9 +130,13 @@ describe("this repo's map", () => {
         return yield* adapter.listMaps();
       }),
     );
-    expect(descriptors).toHaveLength(1);
-    expect(descriptors[0]?.closedCount).toBe(10);
-    expect(descriptors[0]?.openCount).toBe(0);
+    expect(descriptors).toHaveLength(2);
+    expect(descriptors.map((d) => d.id).sort()).toEqual([
+      "local:.wayfinder/map.md",
+      "local:.wayfinder/project-handling.map.md",
+    ]);
+    expect(descriptors.find((d) => d.id === "local:.wayfinder/map.md")?.closedCount).toBe(10);
+    expect(descriptors.find((d) => d.id === "local:.wayfinder/map.md")?.openCount).toBe(0);
   });
 });
 
