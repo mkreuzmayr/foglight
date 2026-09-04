@@ -9,7 +9,8 @@
 import { MagnifyingGlass, SquaresFour, Warning } from "@phosphor-icons/react";
 import type { MapDescriptor, Project, ResourceId } from "@foglight/core/domain";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import {
   collidingNames,
   degradedNote,
@@ -20,11 +21,11 @@ import {
 } from "@/lib/picker.js";
 import { cn } from "@/lib/utils";
 
-const projectDot: Record<Project["state"], string> = {
+const projectDot = {
   ready: "bg-decided",
   "no-tracker": "bg-transparent ring-1 ring-ink-faint",
   error: "bg-invalid",
-};
+} satisfies Record<Project["state"], string>;
 
 const MiniProgress = ({ closed, total }: { closed: number; total: number }) => (
   <span className="flex items-center gap-1.5">
@@ -64,7 +65,9 @@ const MapRow = ({
   <button
     type="button"
     ref={(el) => {
-      if (active) el?.scrollIntoView?.({ block: "nearest" });
+      if (active) {
+        el?.scrollIntoView?.({ block: "nearest" });
+      }
     }}
     onPointerMove={onHover}
     onPointerDown={onPick}
@@ -113,83 +116,102 @@ const paneEntry = (
   </button>
 );
 
-export const MapPicker = ({
-  open,
-  maps,
-  projects,
-  current,
-  onOpenMap,
-  onClose,
-}: {
+type MapPickerProps = {
   open: boolean;
-  maps: ReadonlyArray<MapDescriptor>;
-  projects: ReadonlyArray<Project>;
+  maps: readonly MapDescriptor[];
+  projects: readonly Project[];
   current: ResourceId | null;
   onOpenMap: (id: ResourceId) => void;
   onClose: () => void;
-}) => {
+};
+
+export const MapPicker = (props: MapPickerProps) => (
+  <AnimatePresence>{props.open ? <PickerDialog key="picker" {...props} /> : null}</AnimatePresence>
+);
+
+const PickerDialog = ({ maps, projects, current, onOpenMap, onClose }: MapPickerProps) => {
   const reduce = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [scope, setScope] = useState<string | null>(null);
 
+  const close = useEffectEvent(onClose);
+
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Focus the mounted dialog and clean up its global Escape listener.
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setActive(0);
-    setScope(null);
     inputRef.current?.focus();
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        close();
+      }
     };
+
     window.addEventListener("keydown", onKey);
+
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, []);
 
   const multi = isMultiProject(projects);
   const searching = query.trim().length > 0;
-  const scoped = scope === null ? undefined : projects.find((project) => project.id === scope);
+  const scoped = projects.find((project) => project.id === scope);
   const collisions = collidingNames(projects);
-  const nav = searching
-    ? filterMaps(maps, projects, query)
-    : scoped
-      ? mapsOf(maps, scoped.id)
-      : maps;
+  const nav = visibleMaps(maps, projects, query, scoped);
 
-  const order: Array<string | null> = [null, ...projects.map((project) => project.id)];
+  const order: (string | null)[] = [null, ...projects.map((project) => project.id)];
   const moveScope = (dir: 1 | -1) => {
-    if (!multi) return;
+    if (!multi) {
+      return;
+    }
+
     const i = order.indexOf(scoped?.id ?? null);
     setScope(order[(i + dir + order.length) % order.length] ?? null);
     setActive(0);
   };
 
+  const moveRow = (direction: number) =>
+    setActive(nav.length === 0 ? 0 : (active + direction + nav.length) % nav.length);
+
+  const moveHorizontally = (event: KeyboardEvent) => {
+    if (!query && multi) {
+      event.preventDefault();
+      moveScope(event.key === "ArrowLeft" ? -1 : 1);
+    }
+  };
+
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      return onClose();
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setActive(nav.length === 0 ? 0 : (active + 1) % nav.length);
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActive(nav.length === 0 ? 0 : (active - 1 + nav.length) % nav.length);
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const chosen = nav[active];
-      if (chosen !== undefined) onOpenMap(chosen.id);
-    }
-    if (event.key === "ArrowLeft" && !query && multi) {
-      event.preventDefault();
-      moveScope(-1);
-    }
-    if (event.key === "ArrowRight" && !query && multi) {
-      event.preventDefault();
-      moveScope(1);
+    switch (event.key) {
+      case "Escape":
+        event.preventDefault();
+        onClose();
+
+        return;
+
+      case "ArrowDown":
+        event.preventDefault();
+        moveRow(1);
+
+        return;
+
+      case "ArrowUp":
+        event.preventDefault();
+        moveRow(-1);
+
+        return;
+
+      case "Enter": {
+        event.preventDefault();
+        const chosen = nav[active];
+        if (chosen !== undefined) {
+          onOpenMap(chosen.id);
+        }
+
+        return;
+      }
+
+      case "ArrowLeft":
+      case "ArrowRight":
+        moveHorizontally(event);
     }
   };
 
@@ -197,6 +219,7 @@ export const MapPicker = ({
     nav.map((map, i) => {
       const project = projects.find((p) => p.id === map.project?.id);
       const label = project === undefined ? undefined : projectLabel(project, collisions);
+
       return (
         <MapRow
           key={String(map.id)}
@@ -214,125 +237,155 @@ export const MapPicker = ({
     });
 
   return (
-    <AnimatePresence>
-      {open ? (
-        <motion.div
-          key="picker"
-          className="absolute inset-0 z-30"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: reduce ? 0 : 0.16 }}
-        >
-          <div className="absolute inset-0 bg-black/45" onPointerDown={onClose} />
-          <motion.div
-            role="dialog"
-            aria-label="Map picker"
-            className="material-rail absolute left-1/2 top-[16vh] flex max-h-[62vh] w-[700px] -translate-x-1/2 flex-col overflow-hidden rounded-[18px]"
-            style={{ maxWidth: "calc(100vw - 32px)" }}
-            initial={reduce ? false : { opacity: 0, scale: 0.97, y: -8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -4 }}
-            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
-            onKeyDown={onKeyDown}
-          >
-            <div className="flex items-center gap-2.5 border-b border-hair px-4 py-3">
-              <MagnifyingGlass size={15} className="shrink-0 text-ink-faint" />
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setActive(0);
-                }}
-                placeholder="Search every project — or browse below…"
-                aria-label="Search maps"
-                className="w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
-              />
-              <kbd className="t-mono shrink-0 rounded border border-hair-bright px-1.5 py-0.5 text-[9.5px] text-ink-faint">
-                esc
-              </kbd>
+    <motion.div
+      key="picker"
+      className="absolute inset-0 z-30"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: reduce ? 0 : 0.16 }}
+    >
+      <div className="absolute inset-0 bg-black/45" onPointerDown={onClose} />
+      <motion.dialog
+        open
+        aria-label="Map picker"
+        className="material-rail m-0 p-0 text-inherit absolute left-1/2 top-[16vh] flex max-h-[62vh] w-[700px] -translate-x-1/2 flex-col overflow-hidden rounded-[18px]"
+        style={{ maxWidth: "calc(100vw - 32px)" }}
+        initial={reduce ? false : { opacity: 0, scale: 0.97, y: -8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -4 }}
+        transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+        onKeyDown={onKeyDown}
+      >
+        <div className="flex items-center gap-2.5 border-b border-hair px-4 py-3">
+          <MagnifyingGlass size={15} className="shrink-0 text-ink-faint" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActive(0);
+            }}
+            placeholder="Search every project — or browse below…"
+            aria-label="Search maps"
+            className="w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
+          />
+          <kbd className="t-mono shrink-0 rounded border border-hair-bright px-1.5 py-0.5 text-[9.5px] text-ink-faint">
+            esc
+          </kbd>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {searching ? (
+            <div className="px-1.5 py-1.5">
+              {rows(multi)}
+              {nav.length === 0 ? (
+                <p className="px-3 py-3 text-[12px] text-ink-faint">
+                  No map matches “{query}” in any attached project.
+                </p>
+              ) : null}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {searching ? (
-                <div className="px-1.5 py-1.5">
-                  {rows(multi)}
-                  {nav.length === 0 ? (
-                    <p className="px-3 py-3 text-[12px] text-ink-faint">
-                      No map matches “{query}” in any attached project.
-                    </p>
-                  ) : null}
+          ) : (
+            <div className="flex min-h-[230px]">
+              {multi ? (
+                <div className="w-[190px] shrink-0 border-r border-hair px-1.5 py-1.5">
+                  {paneEntry(
+                    scoped === undefined,
+                    () => {
+                      setScope(null);
+                      setActive(0);
+                    },
+                    <SquaresFour size={13} className="shrink-0 text-ink-faint" />,
+                    "All maps",
+                    maps.length,
+                  )}
+                  <div className="mx-2.5 my-1 border-t border-hair" />
+                  {projects.map((proj) => {
+                    const label = projectLabel(proj, collisions);
+
+                    return (
+                      <Fragment key={proj.id}>
+                        {paneEntry(
+                          scoped?.id === proj.id,
+                          () => {
+                            setScope(proj.id);
+                            setActive(0);
+                          },
+                          <span
+                            className={cn("size-1.5 shrink-0 rounded-full", projectDot[proj.state])}
+                          />,
+                          label.name,
+                          mapsOf(maps, proj.id).length,
+                          label.disambiguator ?? proj.path,
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </div>
-              ) : (
-                <div className="flex min-h-[230px]">
-                  {multi ? (
-                    <div className="w-[190px] shrink-0 border-r border-hair px-1.5 py-1.5">
-                      {paneEntry(
-                        scoped === undefined,
-                        () => {
-                          setScope(null);
-                          setActive(0);
-                        },
-                        <SquaresFour size={13} className="shrink-0 text-ink-faint" />,
-                        "All maps",
-                        maps.length,
-                      )}
-                      <div className="mx-2.5 my-1 border-t border-hair" />
-                      {projects.map((proj) => {
-                        const label = projectLabel(proj, collisions);
-                        return (
-                          <Fragment key={proj.id}>
-                            {paneEntry(
-                              scoped?.id === proj.id,
-                              () => {
-                                setScope(proj.id);
-                                setActive(0);
-                              },
-                              <span
-                                className={cn(
-                                  "size-1.5 shrink-0 rounded-full",
-                                  projectDot[proj.state],
-                                )}
-                              />,
-                              label.name,
-                              mapsOf(maps, proj.id).length,
-                              label.disambiguator ?? proj.path,
-                            )}
-                          </Fragment>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  <div className="min-w-0 flex-1 px-1.5 py-1.5">
-                    {scoped !== undefined && nav.length === 0 ? (
-                      <p className="flex items-start gap-1.5 px-3 py-2.5 text-[11px] leading-snug text-ink-faint">
-                        <Warning
-                          size={13}
-                          className={cn(
-                            "mt-[1px] shrink-0",
-                            scoped.state === "error" ? "text-invalid" : undefined,
-                          )}
-                        />
-                        {degradedNote(scoped)}
-                      </p>
-                    ) : null}
-                    {rows(multi && scoped === undefined)}
-                  </div>
-                </div>
-              )}
+              ) : null}
+              <div className="min-w-0 flex-1 px-1.5 py-1.5">
+                <ScopeEmptyState project={scoped} empty={nav.length === 0} />
+                {rows(multi && scoped === undefined)}
+              </div>
             </div>
-            <div className="flex items-center gap-3 border-t border-hair px-4 py-2 text-[10px] text-ink-faint">
-              {multi && !searching ? <span>←→ scope</span> : null}
-              <span>↑↓ navigate</span>
-              <span>↵ open</span>
-              <span className="t-mono ml-auto">
-                {maps.length} maps · {projects.length}{" "}
-                {projects.length === 1 ? "project" : "projects"}
-              </span>
-            </div>
-          </motion.div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+          )}
+        </div>
+        <PickerFooter
+          multi={multi}
+          searching={searching}
+          mapCount={maps.length}
+          projectCount={projects.length}
+        />
+      </motion.dialog>
+    </motion.div>
   );
 };
+
+const visibleMaps = (
+  maps: readonly MapDescriptor[],
+  projects: readonly Project[],
+  query: string,
+  scoped: Project | undefined,
+) => {
+  if (query.trim().length > 0) {
+    return filterMaps(maps, projects, query);
+  }
+
+  return scoped === undefined ? maps : mapsOf(maps, scoped.id);
+};
+
+const ScopeEmptyState = ({ project, empty }: { project: Project | undefined; empty: boolean }) => {
+  if (project === undefined || !empty) {
+    return null;
+  }
+
+  return (
+    <p className="flex items-start gap-1.5 px-3 py-2.5 text-[11px] leading-snug text-ink-faint">
+      <Warning
+        size={13}
+        className={cn("mt-[1px] shrink-0", project.state === "error" ? "text-invalid" : undefined)}
+      />
+      {degradedNote(project)}
+    </p>
+  );
+};
+
+const PickerFooter = ({
+  multi,
+  searching,
+  mapCount,
+  projectCount,
+}: {
+  multi: boolean;
+  searching: boolean;
+  mapCount: number;
+  projectCount: number;
+}) => (
+  <div className="flex items-center gap-3 border-t border-hair px-4 py-2 text-[10px] text-ink-faint">
+    {multi && !searching ? <span>←→ scope</span> : null}
+    <span>↑↓ navigate</span>
+    <span>↵ open</span>
+    <span className="t-mono ml-auto">
+      {mapCount} maps · {projectCount} {projectCount === 1 ? "project" : "projects"}
+    </span>
+  </div>
+);

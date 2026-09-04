@@ -6,10 +6,11 @@
  * jsdom test would happily pass on a cockpit that draws nothing. That job
  * belongs to `test/cockpit.probe.ts`, which drives real Chromium.
  */
+import { TicketNode } from "@foglight/core/domain";
 import type { MapSnapshot, ResourceId } from "@foglight/core/domain";
 import { describe, expect, it } from "vitest";
-import { resolveInitialMap } from "../src/lib/address.js";
-import { buildGraph, structureHash, DESTINATION_ID } from "../src/lib/graph.js";
+import { resolveInitialMap } from "@/lib/address.js";
+import { buildGraph, structureHash, DESTINATION_ID } from "@/lib/graph.js";
 
 const id = (value: string) => value as ResourceId;
 
@@ -66,10 +67,11 @@ describe("buildGraph", () => {
     const graph = buildGraph(
       snapshot({
         tickets: snapshot().tickets.map((t) =>
-          t.shortId === "002" ? { ...t, blockedBy: ["999"] } : t,
+          t.shortId === "002" ? patchTicket(t, { blockedBy: ["999"] }) : t,
         ),
       } as Partial<MapSnapshot>),
     );
+
     expect(graph.edges.some((e) => e.target === "t/002")).toBe(false);
   });
 
@@ -82,11 +84,32 @@ describe("buildGraph", () => {
     const withFog = snapshot({
       fog: [{ id: id("f/1"), slug: "x", term: "Something", hangsOn: ["002"], bodyHash: "h" }],
     } as Partial<MapSnapshot>);
+
     const graph = buildGraph(withFog);
     expect(graph.nodes.some((n) => n.type === "fog")).toBe(true);
     expect(graph.edges.some((e) => e.source === "t/002" && e.target === "f/1")).toBe(true);
     expect(graph.edges.some((e) => e.source === "f/1" && e.target === DESTINATION_ID)).toBe(true);
   });
+});
+
+it("reuses positions while refreshing data for a text-only snapshot", () => {
+  const initial = snapshot();
+  const graph = buildGraph(initial);
+  const edited = snapshot({
+    tickets: initial.tickets.map((ticket) => patchTicket(ticket, { title: "Edited title" })),
+  });
+
+  const updated = buildGraph(edited, graph.nodes);
+
+  expect(updated.nodes.map((node) => node.position)).toEqual(
+    graph.nodes.map((node) => node.position),
+  );
+
+  expect(updated.nodes.find((node) => node.id === "t/001")?.data.ticket).toMatchObject({
+    title: "Edited title",
+  });
+
+  expect(graph.nodes.find((node) => node.id === "t/001")?.data.ticket).toEqual(initial.tickets[0]);
 });
 
 describe("structureHash", () => {
@@ -95,9 +118,10 @@ describe("structureHash", () => {
     const before = structureHash(snapshot());
     const after = structureHash(
       snapshot({
-        tickets: snapshot().tickets.map((t) => ({ ...t, title: `${t.title} (edited)` })),
+        tickets: snapshot().tickets.map((t) => patchTicket(t, { title: `${t.title} (edited)` })),
       } as Partial<MapSnapshot>),
     );
+
     expect(after).toBe(before);
   });
 
@@ -106,10 +130,11 @@ describe("structureHash", () => {
     const after = structureHash(
       snapshot({
         tickets: snapshot().tickets.map((t) =>
-          t.shortId === "002" ? { ...t, status: "closed" } : t,
+          t.shortId === "002" ? patchTicket(t, { status: "closed" }) : t,
         ),
       } as Partial<MapSnapshot>),
     );
+
     expect(after).not.toBe(before);
   });
 
@@ -118,10 +143,11 @@ describe("structureHash", () => {
     const after = structureHash(
       snapshot({
         tickets: snapshot().tickets.map((t) =>
-          t.shortId === "001" ? { ...t, blockedBy: ["002"] } : t,
+          t.shortId === "001" ? patchTicket(t, { blockedBy: ["002"] }) : t,
         ),
       } as Partial<MapSnapshot>),
     );
+
     expect(after).not.toBe(before);
   });
 });
@@ -164,3 +190,18 @@ describe("cold start", () => {
     expect(resolveInitialMap(null, null, [])).toBeNull();
   });
 });
+
+const patchTicket = (ticket: TicketNode, patch: Partial<TicketNode>): TicketNode =>
+  new TicketNode({
+    id: ticket.id,
+    shortId: ticket.shortId,
+    title: ticket.title,
+    type: ticket.type,
+    status: ticket.status,
+    assignee: ticket.assignee,
+    blockedBy: ticket.blockedBy,
+    bodyHash: ticket.bodyHash,
+    malformed: ticket.malformed,
+    graduatedFrom: ticket.graduatedFrom,
+    ...patch,
+  });

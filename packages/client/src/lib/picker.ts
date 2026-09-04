@@ -8,24 +8,29 @@
 import type { MapDescriptor, Project } from "@foglight/core/domain";
 
 export const mapsOf = (
-  maps: ReadonlyArray<MapDescriptor>,
+  maps: readonly MapDescriptor[],
   projectId: string,
-): ReadonlyArray<MapDescriptor> => maps.filter((map) => map.project?.id === projectId);
+): readonly MapDescriptor[] => maps.filter((map) => map.project?.id === projectId);
 
 /**
  * Typing searches globally: title, destination, and project name. Scope only
  * shapes browsing — a query ignores the left pane.
  */
 export const filterMaps = (
-  maps: ReadonlyArray<MapDescriptor>,
-  projects: ReadonlyArray<Project>,
+  maps: readonly MapDescriptor[],
+  projects: readonly Project[],
   query: string,
-): ReadonlyArray<MapDescriptor> => {
+): readonly MapDescriptor[] => {
   const needle = query.trim().toLowerCase();
-  if (needle === "") return maps;
+  if (needle === "") {
+    return maps;
+  }
+
   const byId = new Map(projects.map((project) => [project.id, project]));
+
   return maps.filter((map) => {
     const project = map.project === undefined ? undefined : byId.get(map.project.id);
+
     return (
       map.title.toLowerCase().includes(needle) ||
       map.destination.toLowerCase().includes(needle) ||
@@ -34,13 +39,14 @@ export const filterMaps = (
   });
 };
 
-export const isMultiProject = (projects: ReadonlyArray<Project>): boolean => projects.length > 1;
+export const isMultiProject = (projects: readonly Project[]): boolean => projects.length > 1;
 
-export const collidingNames = (projects: ReadonlyArray<Project>): ReadonlySet<string> => {
+export const collidingNames = (projects: readonly Project[]): ReadonlySet<string> => {
   const counts = new Map<string, number>();
   for (const project of projects) {
     counts.set(project.name, (counts.get(project.name) ?? 0) + 1);
   }
+
   return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
 };
 
@@ -56,8 +62,10 @@ export const degradedNote = (project: Project): string => {
   if (project.state === "no-tracker") {
     return "no tracker detected — maps appear the moment one lands";
   }
+
   if (project.state === "error") {
     return "this project's tracker failed — maps unavailable";
   }
+
   return "no maps in this project yet";
 };

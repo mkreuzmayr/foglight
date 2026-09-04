@@ -5,7 +5,8 @@
 // mode is not worth its ~460 kB. This is the seam to revisit if maps get much
 // larger than the tens of nodes a wayfinder map runs to.
 
-import dagre from "@dagrejs/dagre";
+import { graphlib, layout as runLayout } from "@dagrejs/dagre";
+import { Schema } from "effect";
 import type { Edge, Node } from "@xyflow/react";
 
 export type Sized = { id: string; width: number; height: number };
@@ -15,7 +16,7 @@ export const layout = (
   edges: Edge[],
   opts: { rankdir?: "TB" | "LR"; ranksep?: number; nodesep?: number } = {},
 ): Node[] => {
-  const g = new dagre.graphlib.Graph();
+  const g = new graphlib.Graph();
   g.setGraph({
     rankdir: opts.rankdir ?? "TB",
     ranksep: opts.ranksep ?? 80,
@@ -23,23 +24,39 @@ export const layout = (
     marginx: 40,
     marginy: 40,
   });
+
   g.setDefaultEdgeLabel(() => ({}));
 
   for (const n of nodes) {
-    g.setNode(n.id, {
-      width: (n.measured?.width ?? (n.width as number) ?? 260) as number,
-      height: (n.measured?.height ?? (n.height as number) ?? 96) as number,
-    });
-  }
-  for (const e of edges) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+    g.setNode(n.id, dimensions(n));
   }
 
-  dagre.layout(g);
+  for (const e of edges) {
+    if (g.hasNode(e.source) && g.hasNode(e.target)) {
+      g.setEdge(e.source, e.target);
+    }
+  }
+
+  runLayout(g);
 
   return nodes.map((n) => {
-    const p = g.node(n.id);
-    if (!p) return n;
+    const p = Schema.decodeUnknownSync(Position)(g.node(n.id));
+    if (!p) {
+      return n;
+    }
+
     return { ...n, position: { x: p.x - p.width / 2, y: p.y - p.height / 2 } };
   });
 };
+
+const Position = Schema.Struct({
+  x: Schema.Number,
+  y: Schema.Number,
+  width: Schema.Number,
+  height: Schema.Number,
+});
+
+const dimensions = (node: Node) => ({
+  width: node.measured?.width ?? node.width ?? 260,
+  height: node.measured?.height ?? node.height ?? 96,
+});

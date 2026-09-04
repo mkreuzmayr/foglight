@@ -11,7 +11,8 @@
  * changed hashes refetch, because the cache key contains the hash.
  */
 import type { MapSnapshot, ResourceId } from "@foglight/core/domain";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { mapBodyQuery, ticketBodyQuery } from "./api.js";
 
@@ -21,15 +22,14 @@ const CONCURRENCY = 2;
 const BREATH_MS = 60;
 
 const idle = (run: () => void): (() => void) => {
-  const anyWindow = window as Window & {
-    requestIdleCallback?: (cb: () => void) => number;
-    cancelIdleCallback?: (handle: number) => void;
-  };
-  if (typeof anyWindow.requestIdleCallback === "function") {
-    const handle = anyWindow.requestIdleCallback(run);
-    return () => anyWindow.cancelIdleCallback?.(handle);
+  if (typeof window.requestIdleCallback === "function") {
+    const handle = window.requestIdleCallback(run);
+
+    return () => window.cancelIdleCallback?.(handle);
   }
+
   const handle = window.setTimeout(run, 200);
+
   return () => window.clearTimeout(handle);
 };
 
@@ -42,13 +42,17 @@ const idle = (run: () => void): (() => void) => {
 export const usePrefetchBodies = (snapshot: MapSnapshot | null): void => {
   const queryClient = useQueryClient();
 
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Schedule idle network prefetching and cancel queued work when the map changes.
   useEffect(() => {
-    if (snapshot === null) return;
-    let cancelled = false;
+    if (snapshot === null) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
 
     const cancelIdle = idle(() => {
       void (async () => {
-        const jobs: Array<() => Promise<unknown>> = [
+        const jobs: (() => Promise<void>)[] = [
           () => queryClient.prefetchQuery(mapBodyQuery(snapshot.id, snapshot.bodyHash)),
           ...snapshot.tickets.map(
             (ticket) => () =>
@@ -56,18 +60,25 @@ export const usePrefetchBodies = (snapshot: MapSnapshot | null): void => {
           ),
         ];
 
-        // `cancelled` is set by the cleanup closure returned below; the loop
-        // awaits between batches, so it observes the flag mid-flight.
-        // oxlint-disable-next-line no-unmodified-loop-condition
-        for (let i = 0; i < jobs.length && !cancelled; i += CONCURRENCY) {
-          await Promise.allSettled(jobs.slice(i, i + CONCURRENCY).map((job) => job()));
-          await new Promise((resolve) => setTimeout(resolve, BREATH_MS));
+        const batches = Array.from({ length: Math.ceil(jobs.length / CONCURRENCY) }, (_, index) =>
+          jobs.slice(index * CONCURRENCY, (index + 1) * CONCURRENCY),
+        );
+
+        for (const batch of batches) {
+          if (controller.signal.aborted) {
+            break;
+          }
+
+          await Promise.allSettled(batch.map((job) => job()));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, BREATH_MS);
+          });
         }
       })();
     });
 
     return () => {
-      cancelled = true;
+      controller.abort();
       cancelIdle();
     };
   }, [snapshot, queryClient]);

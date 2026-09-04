@@ -28,13 +28,12 @@ import {
   ViewportPortal,
   useNodes,
   useReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
 } from "@xyflow/react";
+import type { NodeProps } from "@xyflow/react";
 import { motion, useReducedMotion } from "motion/react";
-import { Target, Warning, Waves, type Icon } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Target, Warning, Waves } from "@phosphor-icons/react";
+import type { Icon } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
 import {
   blocked as blockedTickets,
   claimed as claimedTickets,
@@ -42,10 +41,9 @@ import {
   frontier as frontierTickets,
   progress,
   stateOf,
-  type MapSnapshot,
-  type ResourceId,
-  type TicketNode as Ticket,
+  makeId,
 } from "@foglight/core/domain";
+import type { MapSnapshot, ResourceId, TicketNode as Ticket } from "@foglight/core/domain";
 import { DrawnEdge } from "@/components/DrawnEdge";
 import { RailHeader } from "@/components/RailHeader";
 import { TicketDetail } from "@/components/TicketDetail";
@@ -69,9 +67,11 @@ const RAIL_INSET = 16;
 /** Set by `useSnapshotDiff` on whatever has just arrived, left, or morphed. */
 type Lifecycle = { enterDelay?: number; exiting?: boolean; morph?: boolean };
 
+type AnimationStyle = React.CSSProperties & { "--enter-delay": string };
+
 const lifecycle = (data: Lifecycle) => ({
   className: data.exiting ? "node-exiting" : data.morph ? "node-morph" : undefined,
-  style: { ["--enter-delay" as string]: `${data.enterDelay ?? 0}ms` },
+  style: animationStyle(data),
 });
 
 type TicketNodeData = Lifecycle & { ticket: Ticket; snapshot: MapSnapshot };
@@ -156,12 +156,12 @@ const DestinationCard = ({
 );
 
 const nodeTypes = {
-  ticket: TicketCard as never,
-  fog: FogCard as never,
-  destination: DestinationCard as never,
+  ticket: TicketCard,
+  fog: FogCard,
+  destination: DestinationCard,
 };
 
-const edgeTypes = { drawn: DrawnEdge as never };
+const edgeTypes = { drawn: DrawnEdge };
 
 /**
  * The fog veil — the only perpetual animation in the app, because "unresolved"
@@ -170,12 +170,16 @@ const edgeTypes = { drawn: DrawnEdge as never };
  * A neutral glow: even the fog obeys the colour discipline.
  */
 const FogVeil = () => {
-  const fog = useNodes().filter((n) => n.type === "fog" && n.data["exiting"] !== true);
-  if (fog.length === 0) return null;
+  const fog = useNodes().filter((n) => n.type === "fog" && n.data.exiting !== true);
+  if (fog.length === 0) {
+    return null;
+  }
+
   const left = Math.min(...fog.map((n) => n.position.x)) - 72;
   const top = Math.min(...fog.map((n) => n.position.y)) - 96;
   const right = Math.max(...fog.map((n) => n.position.x + (n.width ?? NODE_W))) + 200;
   const bottom = Math.max(...fog.map((n) => n.position.y + (n.height ?? 46))) + 96;
+
   return (
     <ViewportPortal>
       <div
@@ -196,6 +200,7 @@ const Ring = ({ closed, total }: { closed: number; total: number }) => {
   const r = 13;
   const c = 2 * Math.PI * r;
   const frac = total === 0 ? 0 : closed / total;
+
   return (
     <svg width="34" height="34" viewBox="0 0 34 34" className="shrink-0 -rotate-90">
       <circle cx="17" cy="17" r={r} fill="none" strokeWidth="3" className="stroke-hair-bright" />
@@ -216,7 +221,7 @@ const Ring = ({ closed, total }: { closed: number; total: number }) => {
 
 type Segment = "next" | "all" | "decided";
 
-const SEGMENTS: Array<{ key: Segment; label: string }> = [
+const SEGMENTS: { key: Segment; label: string }[] = [
   { key: "next", label: "Next" },
   { key: "all", label: "All" },
   { key: "decided", label: "Decided" },
@@ -295,49 +300,32 @@ export type CockpitProps = {
 
 const Inner = (props: CockpitProps) => {
   const { snapshot, selected, onSelect } = props;
-  const target = useMemo(() => buildGraph(snapshot), [snapshot]);
+  const target = useGraphLayout(snapshot);
   // Seed once. Every later snapshot is a diff against React Flow's own store.
-  const seed = useRef<ReturnType<typeof decorateFirstPaint>>(undefined);
-  seed.current ??= decorateFirstPaint(target);
+  const [seed] = useState(() => decorateFirstPaint(target));
   const reduce = useReducedMotion() ?? false;
   const rf = useReactFlow();
   const [segment, setSegment] = useState<Segment>("next");
 
-  // Layout only re-runs when the *structure* moved. A typo fix must not move
-  // a card, so `data` is patched in place under an unchanged hash.
-  const hash = structureHash(snapshot);
-  const laidOut = useRef<{ hash: string; graph: { nodes: Node[]; edges: Edge[] } }>(undefined);
-  if (laidOut.current === undefined || laidOut.current.hash !== hash) {
-    laidOut.current = { hash, graph: target };
-  } else {
-    laidOut.current = {
-      hash,
-      graph: {
-        nodes: laidOut.current.graph.nodes.map((node) => {
-          const next = target.nodes.find((n) => n.id === node.id);
-          return next === undefined ? node : { ...node, data: next.data };
-        }),
-        edges: target.edges,
-      },
-    };
-  }
-
-  useSnapshotDiff(laidOut.current.graph, reduce);
+  useSnapshotDiff(target, reduce);
 
   // Selection lives in the store too, identity-stable where unchanged so
   // untouched nodes and edges skip rendering entirely.
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Synchronize URL selection into the external React Flow store.
   useEffect(() => {
     rf.setNodes((ns) =>
       ns.map((n) =>
         n.selected === (n.id === selected) ? n : { ...n, selected: n.id === selected },
       ),
     );
+
     rf.setEdges((es) =>
       es.map((e) => {
         const cls =
           selected !== null && (e.source === selected || e.target === selected)
             ? "edge-lit"
             : undefined;
+
         return e.className === cls ? e : { ...e, className: cls };
       }),
     );
@@ -349,49 +337,29 @@ const Inner = (props: CockpitProps) => {
     // current filter would hide its row (canvas → rail selection especially).
     const ticket = snapshot.tickets.find((t) => t.id === id);
     if (ticket !== undefined) {
-      if (ticket.status === "closed" && segment === "next") setSegment("decided");
-      if (ticket.status === "open" && segment === "decided") setSegment("next");
+      if (ticket.status === "closed" && segment === "next") {
+        setSegment("decided");
+      }
+
+      if (ticket.status === "open" && segment === "decided") {
+        setSegment("next");
+      }
     }
+
     // The viewport never moves on its own — but it may move because a person
     // asked for this ticket. That is not the same thing (SPEC.md §8).
-    rf.fitView({ nodes: [{ id: String(id) }], padding: 3.2, duration: 320, maxZoom: 1.15 });
+    void rf.fitView({ nodes: [{ id: String(id) }], padding: 3.2, duration: 320, maxZoom: 1.15 });
   };
 
   const p = progress(snapshot);
-  const front = frontierTickets(snapshot);
-  const claimed = claimedTickets(snapshot);
-  const blocked = blockedTickets(snapshot);
-  const done = decisionsSoFar(snapshot);
-
-  const rows = (list: ReadonlyArray<Ticket>) =>
-    list.map((ticket) => (
-      <Row
-        key={ticket.id}
-        ticket={ticket}
-        snapshot={snapshot}
-        selected={selected === ticket.id}
-        onSelect={() => pick(ticket.id)}
-      />
-    ));
-
-  const fogRows = snapshot.fog.map((patch) => (
-    <div key={patch.id} className="px-4 py-1.5">
-      <div className="t-title text-[12px] italic text-ink-dim">{patch.term}</div>
-      <div className="mt-0.5 text-[10.5px] leading-snug text-ink-faint">
-        {patch.hangsOn.length > 0
-          ? `hangs on ${patch.hangsOn.join(", ")}`
-          : "not yet hanging on anything"}
-      </div>
-    </div>
-  ));
 
   return (
     <div className="relative h-full overflow-hidden bg-ground">
       {/* Full-bleed canvas; the rail is a material floating over it. */}
       <div className={cn("absolute inset-0", selected !== null && "edges-dimmed")}>
         <ReactFlow
-          defaultNodes={seed.current.nodes}
-          defaultEdges={seed.current.edges}
+          defaultNodes={seed.nodes}
+          defaultEdges={seed.edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           // The `fitView` *prop*, not a fitView call on init: React Flow defers
@@ -413,7 +381,7 @@ const Inner = (props: CockpitProps) => {
           maxZoom={1.5}
           nodesDraggable={false}
           onNodeClick={(_, node) =>
-            node.type === "ticket" ? pick(node.id as ResourceId) : onSelect(null)
+            node.type === "ticket" ? pick(makeId(node.id)) : onSelect(null)
           }
           onPaneClick={() => onSelect(null)}
         >
@@ -464,6 +432,7 @@ const Inner = (props: CockpitProps) => {
           >
             {SEGMENTS.map((s) => (
               <button
+                type="button"
                 key={s.key}
                 role="tab"
                 aria-selected={segment === s.key}
@@ -490,68 +459,7 @@ const Inner = (props: CockpitProps) => {
 
         {/* One continuous list under the filter — "Next" is the standing
             answer to "what do I pick up next". */}
-        <div className="edge-fade-top min-h-0 flex-1 overflow-y-auto pb-2">
-          {segment === "next" ? (
-            <>
-              {front.length > 0 ? (
-                rows(front)
-              ) : (
-                <p className="px-4 py-2 text-[11.5px] text-ink-faint">
-                  {snapshot.tickets.length === 0
-                    ? "No tickets on this map yet."
-                    : done.length === snapshot.tickets.length
-                      ? "Every ticket is decided. The way to the destination is clear."
-                      : "Nothing takeable. Every open ticket is claimed or blocked."}
-                </p>
-              )}
-              {claimed.length > 0 ? (
-                <>
-                  <MiniHeader label="claimed" tint="text-claimed" />
-                  {rows(claimed)}
-                </>
-              ) : null}
-              {blocked.length > 0 ? (
-                <>
-                  <MiniHeader label="blocked" />
-                  {rows(blocked)}
-                </>
-              ) : null}
-            </>
-          ) : null}
-
-          {segment === "all" ? (
-            <>
-              <MiniHeader label="frontier" />
-              {rows(front)}
-              <MiniHeader label="claimed" tint="text-claimed" />
-              {rows(claimed)}
-              <MiniHeader label="blocked" />
-              {rows(blocked)}
-              <MiniHeader label="decisions so far" tint="text-decided" />
-              {rows(done)}
-              <MiniHeader label="not yet specified" />
-              {fogRows}
-              {/* Out of scope has no position on a dependency graph — the rail
-                  is the only place it can appear at all. */}
-              <MiniHeader label="out of scope" />
-              {snapshot.outOfScope.map((entry) => (
-                <div key={entry.id} className="px-4 py-1.5">
-                  <div className="text-[12px] text-ink-faint line-through decoration-hair-bright">
-                    {entry.term}
-                  </div>
-                </div>
-              ))}
-            </>
-          ) : null}
-
-          {segment === "decided" ? (
-            done.length > 0 ? (
-              rows(done)
-            ) : (
-              <p className="px-4 py-2 text-[11.5px] text-ink-faint">Nothing decided yet.</p>
-            )
-          ) : null}
-        </div>
+        <TicketSections snapshot={snapshot} selected={selected} segment={segment} onPick={pick} />
 
         {snapshot.warnings.length > 0 ? (
           <div className="max-h-40 shrink-0 overflow-y-auto border-t border-invalid/25 bg-invalid/[0.05] px-4 py-3">
@@ -597,3 +505,137 @@ export const Cockpit = (props: CockpitProps) => (
 );
 
 export { DESTINATION_ID };
+
+const animationStyle = (data: Lifecycle): AnimationStyle => ({
+  "--enter-delay": `${data.enterDelay ?? 0}ms`,
+});
+
+const useGraphLayout = (snapshot: MapSnapshot) => {
+  const [layoutState, setLayoutState] = useState(() => ({
+    snapshot,
+    hash: structureHash(snapshot),
+    graph: buildGraph(snapshot),
+  }));
+
+  const hash = structureHash(snapshot);
+  const target =
+    layoutState.snapshot === snapshot
+      ? layoutState.graph
+      : buildGraph(snapshot, hash === layoutState.hash ? layoutState.graph.nodes : undefined);
+
+  if (layoutState.snapshot !== snapshot) {
+    setLayoutState({ snapshot, hash, graph: target });
+  }
+
+  return target;
+};
+
+const TicketSections = ({
+  snapshot,
+  selected,
+  segment,
+  onPick,
+}: {
+  snapshot: MapSnapshot;
+  selected: ResourceId | null;
+  segment: Segment;
+  onPick: (id: ResourceId) => void;
+}) => {
+  const front = frontierTickets(snapshot);
+  const claimed = claimedTickets(snapshot);
+  const blocked = blockedTickets(snapshot);
+  const done = decisionsSoFar(snapshot);
+
+  const rows = (list: readonly Ticket[]) =>
+    list.map((ticket) => (
+      <Row
+        key={ticket.id}
+        ticket={ticket}
+        snapshot={snapshot}
+        selected={selected === ticket.id}
+        onSelect={() => onPick(ticket.id)}
+      />
+    ));
+
+  const fogRows = snapshot.fog.map((patch) => (
+    <div key={patch.id} className="px-4 py-1.5">
+      <div className="t-title text-[12px] italic text-ink-dim">{patch.term}</div>
+      <div className="mt-0.5 text-[10.5px] leading-snug text-ink-faint">
+        {patch.hangsOn.length > 0
+          ? `hangs on ${patch.hangsOn.join(", ")}`
+          : "not yet hanging on anything"}
+      </div>
+    </div>
+  ));
+
+  return (
+    <div className="edge-fade-top min-h-0 flex-1 overflow-y-auto pb-2">
+      {segment === "next" ? (
+        <>
+          {front.length > 0 ? (
+            rows(front)
+          ) : (
+            <p className="px-4 py-2 text-[11.5px] text-ink-faint">
+              {emptyFrontierMessage(snapshot)}
+            </p>
+          )}
+          {claimed.length > 0 ? (
+            <>
+              <MiniHeader label="claimed" tint="text-claimed" />
+              {rows(claimed)}
+            </>
+          ) : null}
+          {blocked.length > 0 ? (
+            <>
+              <MiniHeader label="blocked" />
+              {rows(blocked)}
+            </>
+          ) : null}
+        </>
+      ) : null}
+
+      {segment === "all" ? (
+        <>
+          <MiniHeader label="frontier" />
+          {rows(front)}
+          <MiniHeader label="claimed" tint="text-claimed" />
+          {rows(claimed)}
+          <MiniHeader label="blocked" />
+          {rows(blocked)}
+          <MiniHeader label="decisions so far" tint="text-decided" />
+          {rows(done)}
+          <MiniHeader label="not yet specified" />
+          {fogRows}
+          {/* Out of scope has no position on a dependency graph — the rail
+                  is the only place it can appear at all. */}
+          <MiniHeader label="out of scope" />
+          {snapshot.outOfScope.map((entry) => (
+            <div key={entry.id} className="px-4 py-1.5">
+              <div className="text-[12px] text-ink-faint line-through decoration-hair-bright">
+                {entry.term}
+              </div>
+            </div>
+          ))}
+        </>
+      ) : null}
+
+      {segment === "decided" ? (
+        done.length > 0 ? (
+          rows(done)
+        ) : (
+          <p className="px-4 py-2 text-[11.5px] text-ink-faint">Nothing decided yet.</p>
+        )
+      ) : null}
+    </div>
+  );
+};
+
+const emptyFrontierMessage = (snapshot: MapSnapshot) => {
+  if (snapshot.tickets.length === 0) {
+    return "No tickets on this map yet.";
+  }
+
+  return snapshot.tickets.every((ticket) => ticket.status === "closed")
+    ? "Every ticket is decided. The way to the destination is clear."
+    : "Nothing takeable. Every open ticket is claimed or blocked.";
+};

@@ -15,7 +15,8 @@
 // and purged after the exit window.
 import { useEffect, useRef } from "react";
 import { animate } from "motion/react";
-import { useReactFlow, type Edge, type Node } from "@xyflow/react";
+import { useReactFlow } from "@xyflow/react";
+import type { Edge, Node } from "@xyflow/react";
 
 /** Must outlast the exit animations (edge retract 200ms + node fade tail). */
 const EXIT_WINDOW = 340;
@@ -26,9 +27,12 @@ const MOVE_S = 0.32;
 const EASE_IN_OUT = [0.77, 0, 0.175, 1] as const;
 
 const shallowEqual = (a: object = {}, b: object = {}) => {
-  const ka = Object.keys(a) as (keyof typeof a)[];
-  const kb = Object.keys(b) as (keyof typeof b)[];
-  return ka.length === kb.length && ka.every((k) => a[k] === b[k]);
+  const entries = new Map<string, unknown>(Object.entries(a));
+
+  return (
+    entries.size === Object.keys(b).length &&
+    Object.entries(b).every(([key, value]) => entries.has(key) && entries.get(key) === value)
+  );
 };
 
 export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce: boolean) => {
@@ -37,15 +41,19 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
   const purge = useRef<ReturnType<typeof setTimeout>>(undefined);
   const motion = useRef<{ stop: () => void }>(undefined);
 
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Animate the external React Flow store after commit and cancel motion and timers on cleanup.
   useEffect(() => {
     // First target is the seed — it went in through defaultNodes/defaultEdges.
     if (first.current) {
       first.current = false;
-      return;
+
+      return undefined;
     }
 
-    motion.current?.stop();
-    clearTimeout(purge.current);
+    const cancel = () => {
+      motion.current?.stop();
+      clearTimeout(purge.current);
+    };
 
     const tNodes = new Map(target.nodes.map((n) => [n.id, n]));
     const tEdges = new Map(target.edges.map((e) => [e.id, e]));
@@ -59,17 +67,17 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
     // checked both ways so undoing the change plays the move backwards), the
     // arrival *moves out of* the departure's place instead of fading in beside
     // its ghost. morphFrom: arriving id → position to start the glide at.
-    const originOf = (n: Node | undefined) => (n?.data as { origin?: string })?.origin;
+
     const morphFrom = new Map<string, { x: number; y: number }>();
     /** departed id → the arrival that replaced it in place */
     const morphedInto = new Map<string, string>();
     for (const n of target.nodes) {
-      if (liveNodeIds.has(n.id)) continue;
-      const partner =
-        // fog patch → graduated ticket
-        (originOf(n) && !tNodes.has(originOf(n)!) && liveById.get(originOf(n)!)) ||
-        // graduated ticket → fog patch (the reverse, on undo)
-        liveNodes.find((l) => originOf(l) === n.id && !tNodes.has(l.id));
+      if (liveNodeIds.has(n.id)) {
+        continue;
+      }
+
+      const partner = findMorphPartner(n, tNodes, liveById, liveNodes);
+
       if (partner) {
         morphFrom.set(n.id, { ...partner.position });
         morphedInto.set(partner.id, n.id);
@@ -83,16 +91,23 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
         .filter((n) => !morphedInto.has(n.id)) // replaced in place by its arrival — no ghost
         .map((n) => {
           const t = tNodes.get(n.id);
-          if (!t) return { ...n, data: { ...n.data, exiting: true }, selected: false };
+          if (!t) {
+            return { ...n, data: { ...n.data, exiting: true }, selected: false };
+          }
+
           // keep position (animated below) and measured; refresh content
           return { ...n, data: { ...t.data, enterDelay: n.data.enterDelay ?? 0 } };
         }),
       ...target.nodes
         .filter((n) => !liveNodeIds.has(n.id))
         .map((n) =>
-          morphFrom.has(n.id)
+          morphFrom.get(n.id) !== undefined
             ? // starts where its predecessor stood, fully visible, and glides
-              { ...n, position: morphFrom.get(n.id)!, data: { ...n.data, morph: true } }
+              {
+                ...n,
+                position: morphFrom.get(n.id) ?? n.position,
+                data: { ...n.data, morph: true },
+              }
             : { ...n, data: { ...n.data, enterDelay: reduce ? 0 : NEW_NODE_DELAY } },
         ),
     ]);
@@ -102,7 +117,7 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
         .filter((e) => !(e.data?.exiting && !tEdges.has(e.id)))
         .map((e) => {
           const t = tEdges.get(e.id);
-          if (!t)
+          if (!t) {
             return {
               ...e,
               // an endpoint that morphed away would take this ghost with it —
@@ -111,6 +126,8 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
               target: morphedInto.get(e.target) ?? e.target,
               data: { ...e.data, exiting: true },
             };
+          }
+
           // identity-stable when nothing visible changed → React Flow skips it
           return shallowEqual(e.style, t.style) ? e : { ...e, style: t.style };
         }),
@@ -133,9 +150,13 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
     // every arrival and the hold-still guard would pin morphed nodes at their
     // origin forever.
     const from = new Map(liveNodes.map((n) => [n.id, { ...n.position }]));
-    for (const [id, p] of morphFrom) from.set(id, { ...p });
+    for (const [id, p] of morphFrom) {
+      from.set(id, { ...p });
+    }
+
     const moved = target.nodes.some((t) => {
       const f = from.get(t.id);
+
       return f && (Math.abs(f.x - t.position.x) > 0.5 || Math.abs(f.y - t.position.y) > 0.5);
     });
 
@@ -143,10 +164,12 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
       rf.setNodes((ns) =>
         ns.map((n) => {
           const t = tNodes.get(n.id);
+
           return t ? { ...n, position: { ...t.position } } : n;
         }),
       );
-      return;
+
+      return cancel;
     }
 
     motion.current = animate(0, 1, {
@@ -157,7 +180,10 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
           ns.map((n) => {
             const tgt = tNodes.get(n.id);
             const f = from.get(n.id);
-            if (!tgt || !f) return n; // ghosts and fresh arrivals hold still
+            if (!tgt || !f) {
+              return n;
+            } // ghosts and fresh arrivals hold still
+
             return {
               ...n,
               position: {
@@ -169,14 +195,26 @@ export const useSnapshotDiff = (target: { nodes: Node[]; edges: Edge[] }, reduce
         );
       },
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
 
-  useEffect(
-    () => () => {
-      motion.current?.stop();
-      clearTimeout(purge.current);
-    },
-    [],
+    return cancel;
+  }, [target, reduce, rf]);
+};
+
+const originOf = (node: Node) =>
+  typeof node.data.origin === "string" ? node.data.origin : undefined;
+
+const findMorphPartner = (
+  node: Node,
+  targets: Map<string, Node>,
+  liveById: Map<string, Node>,
+  live: Node[],
+) => {
+  const origin = originOf(node);
+  const predecessor =
+    origin !== undefined && !targets.has(origin) ? liveById.get(origin) : undefined;
+
+  return (
+    predecessor ??
+    live.find((candidate) => originOf(candidate) === node.id && !targets.has(candidate.id))
   );
 };

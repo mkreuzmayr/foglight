@@ -20,6 +20,7 @@ const sectionOf = (markdown: string, heading: string): string | null => {
   const pattern = new RegExp(`^##\\s+${heading}\\s*$([\\s\\S]*?)(?=^##\\s|\\Z)`, "im");
   const match = pattern.exec(markdown);
   const text = match?.[1]?.replace(/<!--[\s\S]*?-->/g, "").trim();
+
   return text === undefined || text === "" ? null : text;
 };
 
@@ -34,7 +35,7 @@ const Body = ({ mapId, ticket }: { mapId: ResourceId; ticket: TicketNode }) => {
     return (
       <div className="flex items-start gap-1.5">
         <p className="text-[11.5px] leading-snug text-invalid/90">
-          Could not read this ticket's body.
+          Could not read this ticket&apos;s body.
         </p>
         <button
           type="button"

@@ -9,7 +9,9 @@
  * experimental, and a query stays `fetching` until the stream *ends*, which
  * for a perpetual feed is never).
  */
-import type { MapDescriptor, MapSnapshot, Project, ResourceId } from "@foglight/core/domain";
+import { MapDescriptor, MapSnapshot, Project } from "@foglight/core/domain";
+import type { ResourceId } from "@foglight/core/domain";
+import { Schema } from "effect";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { keys } from "./api.js";
@@ -20,8 +22,8 @@ export type ConnectionState = "connecting" | "live" | "reconnecting" | "offline"
 export type Live = {
   readonly connection: ConnectionState;
   readonly snapshot: MapSnapshot | null;
-  readonly maps: ReadonlyArray<MapDescriptor> | null;
-  readonly projects: ReadonlyArray<Project> | null;
+  readonly maps: readonly MapDescriptor[] | null;
+  readonly projects: readonly Project[] | null;
   /** true once a snapshot has been superseded by a failed connection */
   readonly stale: boolean;
   readonly retryNow: () => void;
@@ -34,8 +36,8 @@ export const useLive = (mapId: ResourceId | null): Live => {
   const queryClient = useQueryClient();
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [snapshot, setSnapshot] = useState<MapSnapshot | null>(null);
-  const [maps, setMaps] = useState<ReadonlyArray<MapDescriptor> | null>(null);
-  const [projects, setProjects] = useState<ReadonlyArray<Project> | null>(null);
+  const [maps, setMaps] = useState<readonly MapDescriptor[] | null>(null);
+  const [projects, setProjects] = useState<readonly Project[] | null>(null);
   const [nonce, setNonce] = useState(0);
   const failures = useRef(0);
   /**
@@ -43,31 +45,46 @@ export const useLive = (mapId: ResourceId | null): Live => {
    * whichever carries the *older* revision loses, whichever way round they
    * resolve. This is the entire reason `revision` exists.
    */
-  const newest = useRef(-1);
+  const newest = useRef({ mapId, revision: -1 });
 
-  useEffect(() => {
-    // Switching maps is a different subject, not a change: drop the old
-    // snapshot rather than cross-fading stale structure into the new map.
-    setSnapshot(null);
-    newest.current = -1;
-  }, [mapId]);
-
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Own the EventSource connection and close its listeners when the map changes or the component unmounts.
   useEffect(() => {
     const url = mapId === null ? "/api/events" : `/api/events?map=${encodeURIComponent(mapId)}`;
     const source = new EventSource(url);
+    if (newest.current.mapId !== mapId) {
+      newest.current = { mapId, revision: -1 };
+    }
 
-    const onMaps = (event: MessageEvent<string>) => {
+    const onMaps = (event: Event) => {
+      if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+        return;
+      }
+
+      const decoded = Schema.decodeUnknownOption(MapsEvent)(event.data);
+      if (decoded._tag === "None") {
+        return;
+      }
+
+      const next = decoded.value.maps;
       failures.current = 0;
       setConnection("live");
-      const next = (JSON.parse(event.data) as { maps: ReadonlyArray<MapDescriptor> }).maps;
       setMaps(next);
       queryClient.setQueryData(keys.maps, next);
     };
 
-    const onProjects = (event: MessageEvent<string>) => {
+    const onProjects = (event: Event) => {
+      if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+        return;
+      }
+
+      const decoded = Schema.decodeUnknownOption(ProjectsEvent)(event.data);
+      if (decoded._tag === "None") {
+        return;
+      }
+
+      const next = decoded.value.projects;
       failures.current = 0;
       setConnection("live");
-      const next = (JSON.parse(event.data) as { projects: ReadonlyArray<Project> }).projects;
       setProjects(next);
       queryClient.setQueryData(keys.projects, next);
       // Attach/detach is a complete new project list; maps follow on their own
@@ -76,12 +93,24 @@ export const useLive = (mapId: ResourceId | null): Live => {
       void queryClient.invalidateQueries({ queryKey: keys.maps });
     };
 
-    const onMap = (event: MessageEvent<string>) => {
+    const onMap = (event: Event) => {
+      if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+        return;
+      }
+
+      const decoded = Schema.decodeUnknownOption(SnapshotEvent)(event.data);
+      if (decoded._tag === "None" || decoded.value.id !== mapId) {
+        return;
+      }
+
+      const next = decoded.value;
       failures.current = 0;
       setConnection("live");
-      const next = JSON.parse(event.data) as MapSnapshot;
-      if (next.revision <= newest.current) return;
-      newest.current = next.revision;
+      if (next.revision <= newest.current.revision) {
+        return;
+      }
+
+      newest.current.revision = next.revision;
       setSnapshot(next);
       queryClient.setQueryData(keys.snapshot(next.id), next);
     };
@@ -90,6 +119,7 @@ export const useLive = (mapId: ResourceId | null): Live => {
       failures.current = 0;
       setConnection("live");
     };
+
     const onError = () => {
       failures.current += 1;
       // The map stays fully interactive on the last snapshot, marked stale —
@@ -97,16 +127,16 @@ export const useLive = (mapId: ResourceId | null): Live => {
       setConnection(failures.current >= OFFLINE_AFTER ? "offline" : "reconnecting");
     };
 
-    source.addEventListener("maps", onMaps as EventListener);
-    source.addEventListener("projects", onProjects as EventListener);
-    source.addEventListener("map", onMap as EventListener);
+    source.addEventListener("maps", onMaps);
+    source.addEventListener("projects", onProjects);
+    source.addEventListener("map", onMap);
     source.addEventListener("open", onOpen);
     source.addEventListener("error", onError);
 
     return () => {
-      source.removeEventListener("maps", onMaps as EventListener);
-      source.removeEventListener("projects", onProjects as EventListener);
-      source.removeEventListener("map", onMap as EventListener);
+      source.removeEventListener("maps", onMaps);
+      source.removeEventListener("projects", onProjects);
+      source.removeEventListener("map", onMap);
       source.removeEventListener("open", onOpen);
       source.removeEventListener("error", onError);
       source.close();
@@ -115,10 +145,14 @@ export const useLive = (mapId: ResourceId | null): Live => {
 
   return {
     connection,
-    snapshot,
+    snapshot: snapshot?.id === mapId ? snapshot : null,
     maps,
     projects,
-    stale: snapshot !== null && connection !== "live" && connection !== "connecting",
+    stale:
+      snapshot?.id === mapId &&
+      snapshot !== null &&
+      connection !== "live" &&
+      connection !== "connecting",
     // "Retry now" beside the automatic backoff: a person who knows the network
     // came back should not have to wait out a timer.
     retryNow: () => setNonce((n) => n + 1),
@@ -131,7 +165,17 @@ export const useLive = (mapId: ResourceId | null): Live => {
  * rule about revision ordering, not two.
  */
 export const newerOf = (a: MapSnapshot | null, b: MapSnapshot | null): MapSnapshot | null => {
-  if (a === null) return b;
-  if (b === null) return a;
+  if (a === null) {
+    return b;
+  }
+
+  if (b === null) {
+    return a;
+  }
+
   return b.revision > a.revision ? b : a;
 };
+
+const MapsEvent = Schema.parseJson(Schema.Struct({ maps: Schema.Array(MapDescriptor) }));
+const ProjectsEvent = Schema.parseJson(Schema.Struct({ projects: Schema.Array(Project) }));
+const SnapshotEvent = Schema.parseJson(MapSnapshot);

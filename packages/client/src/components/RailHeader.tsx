@@ -15,12 +15,12 @@ import type { MapSnapshot } from "@foglight/core/domain";
 import { cn } from "@/lib/utils";
 import type { ConnectionState } from "@/lib/live.js";
 
-const CONNECTION: Record<ConnectionState, { label: string; dot: string; text: string }> = {
+const CONNECTION = {
   connecting: { label: "connecting", dot: "bg-ink-faint", text: "text-ink-faint" },
   live: { label: "live", dot: "bg-decided", text: "text-decided" },
   reconnecting: { label: "reconnecting", dot: "bg-destination", text: "text-destination" },
   offline: { label: "offline", dot: "bg-invalid", text: "text-invalid" },
-};
+} satisfies Record<ConnectionState, { label: string; dot: string; text: string }>;
 
 export const RailHeader = ({
   snapshot,

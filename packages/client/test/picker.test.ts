@@ -14,7 +14,7 @@ import {
   isMultiProject,
   mapsOf,
   projectLabel,
-} from "../src/lib/picker.js";
+} from "@/lib/picker.js";
 
 const id = (value: string) => value as ResourceId;
 
@@ -40,23 +40,27 @@ const foglight = project({
   name: "foglight",
   path: "/home/michaelk/repos/foglight",
 });
+
 const wayfinder = project({
   id: "wayfinder-9b1c",
   name: "wayfinder",
   path: "/home/michaelk/repos/wayfinder",
   trackerKind: "github",
 });
+
 const blog = project({
   id: "blog-1f00",
   name: "blog",
   path: "/home/michaelk/repos/blog",
 });
+
 const empty = project({
   id: "dotfiles-77aa",
   name: "dotfiles",
   path: "/home/michaelk/dotfiles",
   state: "no-tracker",
 });
+
 const broken = project({
   id: "chronoflow-e401",
   name: "chronoflow",
@@ -64,13 +68,14 @@ const broken = project({
   state: "error",
   trackerKind: "github",
 });
+
 const otherFoglight = project({
   id: "foglight-aa11",
   name: "foglight",
   path: "/tmp/checkouts/foglight",
 });
 
-const maps: ReadonlyArray<MapDescriptor> = [
+const maps: readonly MapDescriptor[] = [
   map({
     id: id("foglight-3f2a:local:.wayfinder/map.md"),
     title: "Foglight — wayfinder map viewer",
@@ -148,10 +153,12 @@ describe("projectLabel", () => {
       name: "foglight",
       disambiguator: "/home/michaelk/repos/foglight",
     });
+
     expect(projectLabel(otherFoglight, collisions)).toEqual({
       name: "foglight",
       disambiguator: "/tmp/checkouts/foglight",
     });
+
     expect(projectLabel(wayfinder, collisions)).toEqual({ name: "wayfinder" });
   });
 });

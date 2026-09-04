@@ -7,11 +7,12 @@
  * remembered opens it outright. The picker is E's jump pane; live attach and
  * detach arrive on the same SSE connection as everything else.
  */
+import { Option, Schema } from "effect";
 import { Lighthouse, Warning } from "@phosphor-icons/react";
-import type { MapDescriptor, Project, ResourceId } from "@foglight/core/domain";
+import type { MapDescriptor, MapSnapshot, Project, ResourceId } from "@foglight/core/domain";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Cockpit } from "@/components/Cockpit";
 import { MapPicker } from "@/components/MapPicker";
 import { mapsQuery, projectsQuery, snapshotQuery } from "@/lib/api.js";
@@ -32,40 +33,46 @@ const Shell = ({ children }: { children: React.ReactNode }) => (
   </div>
 );
 
-const errorTag = (error: unknown): string => {
-  const failure = (error as { failure?: { _tag?: string } } | null)?.failure;
-  return failure?._tag ?? (error as { _tag?: string } | null)?._tag ?? "Unknown";
-};
+const parseErrorTag = Schema.decodeUnknownOption(
+  Schema.Struct({
+    _tag: Schema.optional(Schema.String),
+    failure: Schema.optional(Schema.Struct({ _tag: Schema.optional(Schema.String) })),
+  }),
+);
 
 const FatalState = ({ error, mapId }: { error: unknown; mapId: ResourceId | null }) => {
-  const tag = errorTag(error);
-  const copy: Record<string, { title: string; detail: string }> = {
-    MapNotFound: {
-      title: "That map isn't there",
-      detail: `Nothing on this repo's tracker answers to ${mapId ?? "that id"}. It may have been renamed or closed.`,
-    },
-    MapUnparseable: {
-      title: "This map can't be read",
-      detail:
-        "Foglight found the map but could not make sense of its structure. A map needs a `## Destination` section.",
-    },
-    TrackerUnauthenticated: {
-      title: "No credential for this tracker",
-      detail:
-        "Set GITHUB_TOKEN or GH_TOKEN in the environment, or run `gh auth login`. Foglight only ever reads.",
-    },
-    TrackerUnreachable: {
-      title: "Can't reach the tracker",
-      detail:
-        "The tracker didn't answer. Foglight keeps the last snapshot it received and will retry.",
-    },
-    NoTrackerDetected: {
-      title: "No tracker here",
-      detail:
-        "This repo has no `.wayfinder/` directory and no GitHub `origin` remote. Pass --tracker to force one.",
-    },
-  };
-  const { title, detail } = copy[tag] ?? {
+  const parsed = Option.getOrUndefined(parseErrorTag(error));
+  const tag = parsed?.failure?._tag ?? parsed?._tag ?? "Unknown";
+  const copy = new Map(
+    Object.entries({
+      MapNotFound: {
+        title: "That map isn't there",
+        detail: `Nothing on this repo's tracker answers to ${mapId ?? "that id"}. It may have been renamed or closed.`,
+      },
+      MapUnparseable: {
+        title: "This map can't be read",
+        detail:
+          "Foglight found the map but could not make sense of its structure. A map needs a `## Destination` section.",
+      },
+      TrackerUnauthenticated: {
+        title: "No credential for this tracker",
+        detail:
+          "Set GITHUB_TOKEN or GH_TOKEN in the environment, or run `gh auth login`. Foglight only ever reads.",
+      },
+      TrackerUnreachable: {
+        title: "Can't reach the tracker",
+        detail:
+          "The tracker didn't answer. Foglight keeps the last snapshot it received and will retry.",
+      },
+      NoTrackerDetected: {
+        title: "No tracker here",
+        detail:
+          "This repo has no `.wayfinder/` directory and no GitHub `origin` remote. Pass --tracker to force one.",
+      },
+    }),
+  );
+
+  const { title, detail } = copy.get(tag) ?? {
     title: "Something went wrong",
     detail: String(error),
   };
@@ -85,11 +92,12 @@ const EmptyState = ({
   remembered,
   onBrowse,
 }: {
-  projects: ReadonlyArray<Project>;
+  projects: readonly Project[];
   remembered: { title: string; projectName: string } | null;
   onBrowse: () => void;
 }) => {
   const vacant = projects.length === 0 && remembered === null;
+
   return (
     <Shell>
       <Lighthouse
@@ -103,8 +111,8 @@ const EmptyState = ({
       {vacant ? (
         <p className="max-w-md text-[12px] leading-relaxed text-ink-dim">
           A wayfinder map lives at <span className="t-mono">.wayfinder/map.md</span>, or as an issue
-          labelled <span className="t-mono">wayfinder:map</span> on a project's GitHub. Chart one
-          with <span className="t-mono">/wayfinder</span>, then{" "}
+          labelled <span className="t-mono">wayfinder:map</span> on a project&apos;s GitHub. Chart
+          one with <span className="t-mono">/wayfinder</span>, then{" "}
           <span className="t-mono">foglight serve</span> in that folder.
         </p>
       ) : (
@@ -132,40 +140,19 @@ export const App = () => {
   const { address, selectTicket, openMap } = useAddress();
   const maps = useQuery(mapsQuery());
   const projectsQueryResult = useQuery(projectsQuery());
-  const [pickerOpen, setPickerOpen] = useState(false);
 
-  const projectList = useMemo(() => projectsQueryResult.data ?? [], [projectsQueryResult.data]);
-  const attached = useMemo(() => new Set(projectList.map((project) => project.id)), [projectList]);
-
-  // Ordered most-recently-changed first, ties alphabetical (SPEC.md §9). Drop
-  // descriptors whose project has already detached — the projects event can
-  // beat the maps tick by a beat.
-  const choices = useMemo(() => {
-    const list = [...(maps.data ?? [])].filter((map) => {
-      if (!projectsQueryResult.isSuccess || map.project === undefined) return true;
-      return attached.has(map.project.id);
-    });
-    list.sort((a, b) =>
-      a.changedAt === b.changedAt
-        ? a.title.localeCompare(b.title)
-        : b.changedAt.localeCompare(a.changedAt),
-    );
-    return list;
-  }, [maps.data, attached, projectsQueryResult.isSuccess]);
+  const projectList = projectsQueryResult.data ?? [];
+  const choices = availableMaps(maps.data, projectList, projectsQueryResult.isSuccess);
 
   const rememberedId = rememberedMap();
-  const openId = useMemo(
-    () => resolveInitialMap(address.map, rememberedId, choices),
-    [address.map, rememberedId, choices],
-  );
+  const openId = resolveInitialMap(address.map, rememberedId, choices);
+  const { pickerOpen, setPickerOpen } = usePickerState(openId, maps.isPending, choices.length);
 
   // Subscribe *first*, then GET — so a change landing between the two is
   // delivered rather than lost.
   const live = useLive(openId);
-  const snapshotFromGet = useQuery({
-    ...snapshotQuery(openId as ResourceId),
-    enabled: openId !== null,
-  });
+  const snapshotFromGet = useQuery(snapshotQuery(openId));
+
   const snapshot = newerOf(snapshotFromGet.data ?? null, live.snapshot);
 
   usePrefetchBodies(snapshot);
@@ -174,6 +161,7 @@ export const App = () => {
     const descriptor: MapDescriptor | undefined = choices.find(
       (map) => String(map.id) === String(id),
     );
+
     const project = projectList.find((p) => p.id === descriptor?.project?.id);
     openMap(
       id,
@@ -181,71 +169,15 @@ export const App = () => {
         ? undefined
         : { title: descriptor.title, projectName: project?.name ?? descriptor.project?.name ?? "" },
     );
+
     setPickerOpen(false);
   };
 
-  // Keep the URL honest once a map has actually been resolved, so the address
-  // bar can always be copied and pasted.
-  useEffect(() => {
-    if (openId !== null && address.map === null) {
-      window.history.replaceState(null, "", `/?map=${encodeURIComponent(openId)}`);
-    }
-  }, [openId, address.map]);
-
-  // Refresh the remembered display payload while the map is open, so a later
-  // detach can name what it is waiting for.
-  useEffect(() => {
-    if (openId === null || snapshot === null) return;
-    const project = projectList.find((p) => p.id === snapshot.project?.id);
-    rememberMap(openId, {
-      title: snapshot.title,
-      projectName: project?.name ?? snapshot.project?.name ?? "",
-    });
-  }, [openId, snapshot, projectList]);
-
-  // ⌘K / Ctrl-K anywhere — including the empty state.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        setPickerOpen((open) => !open);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Auto-open the picker on cold start (several maps) and when the open map's
-  // project detaches. Close it when a map reopens itself. Never force it at n=1.
-  const prevOpenId = useRef<ResourceId | null | undefined>(undefined);
-  useEffect(() => {
-    if (maps.isPending) return;
-    if (openId !== null) {
-      if (prevOpenId.current === null) setPickerOpen(false);
-      prevOpenId.current = openId;
-      return;
-    }
-    if (prevOpenId.current) {
-      setPickerOpen(true);
-      prevOpenId.current = null;
-      return;
-    }
-    if (prevOpenId.current === undefined && choices.length > 1) {
-      setPickerOpen(true);
-    }
-    prevOpenId.current = null;
-  }, [openId, maps.isPending, choices.length]);
+  const project = describeOpenProject(projectList, snapshot);
+  useMapMemory(openId, address.map, snapshot, project.projectName);
 
   const reduce = useReducedMotion();
-  const collisions = collidingNames(projectList);
-  const openProject = projectList.find((project) => project.id === snapshot?.project?.id);
-  const openLabel =
-    openProject === undefined
-      ? snapshot?.project === undefined
-        ? null
-        : { name: snapshot.project.name }
-      : projectLabel(openProject, collisions);
-  const waiting = openId === null ? rememberedInfo() : null;
+  const waiting = rememberedInfo();
 
   const picker = (
     <MapPicker
@@ -265,7 +197,10 @@ export const App = () => {
       </Shell>
     );
   }
-  if (maps.isError) return <FatalState error={maps.error} mapId={null} />;
+
+  if (maps.isError) {
+    return <FatalState error={maps.error} mapId={null} />;
+  }
 
   if (openId === null) {
     return (
@@ -283,6 +218,7 @@ export const App = () => {
   if (snapshotFromGet.isError && snapshot === null) {
     return <FatalState error={snapshotFromGet.error} mapId={openId} />;
   }
+
   if (snapshot === null) {
     return (
       <div className="relative h-full">
@@ -309,8 +245,8 @@ export const App = () => {
         >
           <Cockpit
             snapshot={snapshot}
-            projectName={openLabel?.name ?? null}
-            projectPath={openLabel?.disambiguator ?? openProject?.path ?? null}
+            projectName={project.projectName}
+            projectPath={project.projectPath}
             pickerOpen={pickerOpen}
             connection={live.connection}
             stale={live.stale}
@@ -324,4 +260,80 @@ export const App = () => {
       {picker}
     </div>
   );
+};
+
+const compareMaps = (a: MapDescriptor, b: MapDescriptor) =>
+  a.changedAt === b.changedAt
+    ? a.title.localeCompare(b.title)
+    : b.changedAt.localeCompare(a.changedAt);
+
+const availableMaps = (
+  maps: readonly MapDescriptor[] | undefined,
+  projects: readonly Project[],
+  projectsLoaded: boolean,
+) => {
+  const attached = new Set(projects.map((project) => project.id));
+
+  return (maps ?? [])
+    .filter((map) => !projectsLoaded || map.project === undefined || attached.has(map.project.id))
+    .toSorted(compareMaps);
+};
+
+const describeOpenProject = (projects: readonly Project[], snapshot: MapSnapshot | null) => {
+  const project = projects.find((candidate) => candidate.id === snapshot?.project?.id);
+  if (project === undefined) {
+    return { projectName: snapshot?.project?.name ?? null, projectPath: null };
+  }
+
+  const label = projectLabel(project, collidingNames(projects));
+
+  return { projectName: label.name, projectPath: label.disambiguator ?? project.path };
+};
+
+const useMapMemory = (
+  openId: ResourceId | null,
+  addressMap: ResourceId | null,
+  snapshot: MapSnapshot | null,
+  projectName: string | null,
+) => {
+  const title = snapshot?.title;
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Sync resolved server data to browser history and persistent map memory.
+  useEffect(() => {
+    if (openId === null) {
+      return;
+    }
+
+    if (addressMap === null) {
+      window.history.replaceState(null, "", `/?map=${encodeURIComponent(openId)}`);
+    }
+
+    if (title !== undefined) {
+      rememberMap(openId, { title, projectName: projectName ?? "" });
+    }
+  }, [openId, addressMap, title, projectName]);
+};
+
+const usePickerState = (openId: ResourceId | null, pending: boolean, choiceCount: number) => {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [previousMap, setPreviousMap] = useState<ResourceId | null | undefined>(undefined);
+  if (!pending && previousMap !== openId) {
+    setPreviousMap(openId);
+    setPickerOpen(openId === null && (previousMap !== undefined || choiceCount > 1));
+  }
+
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Register and clean up the global Cmd/Ctrl-K browser shortcut.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setPickerOpen((open) => !open);
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  return { pickerOpen, setPickerOpen };
 };

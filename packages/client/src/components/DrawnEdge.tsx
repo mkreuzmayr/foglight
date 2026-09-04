@@ -15,7 +15,8 @@
 //
 // Dashed (fog) edges can't be drawn this way — the dash pattern *is* the dash
 // machinery — so they cross-fade instead.
-import { getBezierPath, type EdgeProps } from "@xyflow/react";
+import { getBezierPath } from "@xyflow/react";
+import type { Edge, EdgeProps } from "@xyflow/react";
 import { cn } from "@/lib/utils.js";
 
 export type DrawnEdgeData = {
@@ -37,7 +38,7 @@ export const DrawnEdge = ({
   targetPosition,
   style,
   data,
-}: EdgeProps) => {
+}: EdgeProps<Edge<DrawnEdgeData>>) => {
   const [path] = getBezierPath({
     sourceX,
     sourceY,
@@ -47,7 +48,8 @@ export const DrawnEdge = ({
     targetPosition,
   });
 
-  const { enter, delay = 0, exiting } = (data ?? {}) as DrawnEdgeData;
+  const { enter, delay = 0, exiting } = data ?? {};
+  const drawStyle: DrawStyle = { ...style, "--draw-delay": `${delay}ms` };
   // A dashed edge keeps its dash pattern; drawing would overwrite it.
   const dashed = Boolean(style?.strokeDasharray);
 
@@ -57,14 +59,20 @@ export const DrawnEdge = ({
       d={path}
       fill="none"
       pathLength={dashed ? undefined : 1}
-      className={cn(
-        "react-flow__edge-path",
-        !dashed && enter && !exiting && "edge-draw-in",
-        !dashed && exiting && "edge-draw-out",
-        dashed && enter && !exiting && "edge-fade-in",
-        dashed && exiting && "edge-fade-out",
-      )}
-      style={{ ...style, ["--draw-delay" as string]: `${delay}ms` }}
+      className={edgeClass(dashed, enter, exiting)}
+      style={drawStyle}
     />
   );
 };
+
+const edgeClass = (dashed: boolean, enter = false, exiting = false) =>
+  cn(
+    "react-flow__edge-path",
+    exiting
+      ? dashed
+        ? "edge-fade-out"
+        : "edge-draw-out"
+      : enter && (dashed ? "edge-fade-in" : "edge-draw-in"),
+  );
+
+type DrawStyle = React.CSSProperties & { "--draw-delay": string };
