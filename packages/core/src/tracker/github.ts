@@ -11,14 +11,12 @@
  * `frontier` and `unblocked` are derived in `core/domain/derive.ts` from
  * status/assignee/blockedBy, so the word cannot mean two things (SPEC.md §5).
  */
-import { HttpClient, HttpClientRequest, type CommandExecutor } from "@effect/platform";
-import { Duration, Effect, Option, Ref, Schedule, Stream, SubscriptionRef } from "effect";
-import {
-  MapNotFound,
-  MapUnparseable,
-  TrackerUnauthenticated,
-  TrackerUnreachable,
-} from "../domain/errors.js";
+import { HttpClient, HttpClientRequest } from "@effect/platform";
+import type { CommandExecutor } from "@effect/platform";
+import { Duration, Effect, Schema, Option, Ref, Schedule, Stream } from "effect";
+import type { SubscriptionRef } from "effect";
+import { MapNotFound, MapUnparseable, TrackerUnreachable } from "#core/domain/errors.js";
+import type { TrackerUnauthenticated } from "#core/domain/errors.js";
 import {
   Body,
   FogNode,
@@ -28,11 +26,17 @@ import {
   OutOfScopeNode,
   TicketNode,
   makeId,
-  type ResourceId,
-  type TicketType,
-} from "../domain/model.js";
-import { fogId, outOfScopeId, parseMapBody, parseTicketBody, ticketDefect } from "../parse/body.js";
-import { hashBody } from "../parse/markdown.js";
+  TicketType,
+} from "#core/domain/model.js";
+import type { ResourceId } from "#core/domain/model.js";
+import {
+  fogId,
+  outOfScopeId,
+  parseMapBody,
+  parseTicketBody,
+  ticketDefect,
+} from "#core/parse/body.js";
+import { hashBody } from "#core/parse/markdown.js";
 import type { ChangeSignal, TrackerAdapter } from "./adapter.js";
 import { resolveToken } from "./github-auth.js";
 
@@ -48,22 +52,26 @@ export type GitHubRepo = { readonly owner: string; readonly repo: string };
  */
 export type PollMode = "active" | "idle" | "paused";
 
-const POLL_INTERVAL: Record<Exclude<PollMode, "paused">, Duration.Duration> = {
+const POLL_INTERVAL = {
   active: Duration.seconds(30),
   idle: Duration.minutes(5),
-};
+} satisfies Record<Exclude<PollMode, "paused">, Duration.Duration>;
 
-type Issue = {
-  number: number;
-  title: string;
-  body: string | null;
-  state: "open" | "closed";
-  assignee: { login: string } | null;
-  labels: Array<{ name: string } | string>;
-  updated_at: string;
-};
+const Issue = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  body: Schema.NullOr(Schema.String),
+  state: Schema.Literal("open", "closed"),
+  assignee: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  labels: Schema.Array(Schema.Union(Schema.Struct({ name: Schema.String }), Schema.String)),
+  updated_at: Schema.String,
+});
 
-const labelNames = (issue: Issue): ReadonlyArray<string> =>
+type Issue = typeof Issue.Type;
+const IssueList = Schema.Array(Issue);
+const Dependencies = Schema.Array(Schema.Struct({ number: Schema.Number }));
+
+const labelNames = (issue: Issue): readonly string[] =>
   issue.labels.map((l) => (typeof l === "string" ? l : l.name));
 
 const ghId = (repo: GitHubRepo, number: number): ResourceId =>
@@ -71,6 +79,7 @@ const ghId = (repo: GitHubRepo, number: number): ResourceId =>
 
 const issueNumber = (id: ResourceId): number | null => {
   const match = /#(\d+)$/.exec(String(id));
+
   return match === null ? null : Number(match[1]);
 };
 
@@ -97,9 +106,7 @@ export const makeGitHubAdapter = (
         ? Effect.succeed(initialToken.right)
         : Effect.fail(initialToken.left);
 
-    const unreachable = (reason: string) => new TrackerUnreachable({ tracker: "github", reason });
-
-    const request = <A>(url: string) =>
+    const request = <A, I>(schema: Schema.Schema<A, I>, url: string) =>
       Effect.gen(function* () {
         const token = yield* withToken;
         const response = yield* baseClient
@@ -114,51 +121,67 @@ export const makeGitHubAdapter = (
           )
           .pipe(Effect.mapError((cause) => unreachable(String(cause))));
 
-        if (response.status === 404) return Option.none<A>();
+        if (response.status === 404) {
+          return Option.none<A>();
+        }
+
         if (response.status >= 400) {
           return yield* unreachable(`GET ${url} → ${response.status}`);
         }
+
         const json = yield* response.json.pipe(
-          Effect.mapError((cause) => unreachable(`GET ${url}: ${cause}`)),
+          Effect.mapError((cause) => unreachable(`GET ${url}: ${String(cause)}`)),
         );
-        return Option.some(json as A);
+
+        const parsed = yield* Schema.decodeUnknown(schema)(json).pipe(
+          Effect.mapError((cause) => unreachable(`GET ${url}: ${String(cause)}`)),
+        );
+
+        return Option.some(parsed);
       });
 
-    const required = <A>(url: string, missing: () => MapNotFound) =>
-      request<A>(url).pipe(
+    const required = <A, I>(schema: Schema.Schema<A, I>, url: string, missing: () => MapNotFound) =>
+      request(schema, url).pipe(
         Effect.flatMap(
           Option.match({ onNone: () => Effect.fail(missing()), onSome: Effect.succeed }),
         ),
       );
 
     const searchIssues = (query: string) =>
-      request<Array<Issue>>(
+      request(
+        IssueList,
         `/repos/${repo.owner}/${repo.repo}/issues?state=all&per_page=100&${query}`,
-      ).pipe(Effect.map(Option.getOrElse(() => [] as Array<Issue>)));
+      ).pipe(Effect.map(Option.getOrElse(() => [])));
 
     /** Child issues of the map — GitHub's sub-issue relation is the map→ticket edge. */
     const subIssues = (number: number) =>
-      request<Array<Issue>>(
+      request(
+        IssueList,
         `/repos/${repo.owner}/${repo.repo}/issues/${number}/sub_issues?per_page=100`,
-      ).pipe(Effect.map(Option.getOrElse(() => [] as Array<Issue>)));
+      ).pipe(Effect.map(Option.getOrElse(() => [])));
 
     /** Native issue dependencies: the blocking relation, read as *facts only*. */
     const blockedBy = (number: number) =>
-      request<Array<{ number: number }>>(
+      request(
+        Dependencies,
         `/repos/${repo.owner}/${repo.repo}/issues/${number}/dependencies/blocked_by?per_page=100`,
       ).pipe(
-        Effect.map(Option.getOrElse(() => [] as Array<{ number: number }>)),
+        Effect.map(Option.getOrElse(() => [])),
         Effect.map((issues) => issues.map((i) => String(i.number))),
         // Dependencies are a newer API surface; a repo without it is not broken.
-        Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+        Effect.orElseSucceed(() => []),
       );
 
-    const ticketType = (issue: Issue): { type: TicketType; warning?: string } => {
+    const ticketType = (issue: Issue): TicketClassification => {
       const found = labelNames(issue)
         .filter((l) => l.startsWith("wayfinder:"))
         .map((l) => l.slice("wayfinder:".length))
-        .find((l) => TICKET_TYPES.has(l));
-      if (found !== undefined) return { type: found as TicketType };
+        .find((l) => Schema.is(TicketType)(l));
+
+      if (found !== undefined && Schema.is(TicketType)(found)) {
+        return { type: found };
+      }
+
       return {
         type: "grilling",
         warning: `no \`wayfinder:<type>\` label (expected ${[...TICKET_TYPES].join(" | ")})`,
@@ -168,9 +191,12 @@ export const makeGitHubAdapter = (
     const loadMap = (id: ResourceId) =>
       Effect.gen(function* () {
         const number = issueNumber(id);
-        if (number === null) return yield* new MapNotFound({ id: String(id) });
+        if (number === null) {
+          return yield* new MapNotFound({ id: String(id) });
+        }
 
-        const issue = yield* required<Issue>(
+        const issue = yield* required(
+          Issue,
           `/repos/${repo.owner}/${repo.repo}/issues/${number}`,
           () => new MapNotFound({ id: String(id) }),
         );
@@ -225,9 +251,21 @@ export const makeGitHubAdapter = (
               }),
             );
           }
+
           return live.length === ticket.blockedBy.length
             ? ticket
-            : new TicketNode({ ...ticket, blockedBy: live });
+            : new TicketNode({
+                id: ticket.id,
+                shortId: ticket.shortId,
+                title: ticket.title,
+                type: ticket.type,
+                status: ticket.status,
+                assignee: ticket.assignee,
+                bodyHash: ticket.bodyHash,
+                malformed: ticket.malformed,
+                graduatedFrom: ticket.graduatedFrom,
+                blockedBy: live,
+              });
         });
 
         const raw = issue.body ?? "";
@@ -242,6 +280,7 @@ export const makeGitHubAdapter = (
         const closedTitles = new Set(
           resolved.filter((t) => t.status === "closed").map((t) => t.title.toLowerCase()),
         );
+
         for (const decision of parsedBody.decisions) {
           if (!closedTitles.has(decision.title.toLowerCase())) {
             warnings.push(
@@ -288,6 +327,7 @@ export const makeGitHubAdapter = (
 
     const listMaps = Effect.gen(function* () {
       const maps = yield* searchIssues("labels=wayfinder:map");
+
       return yield* Effect.forEach(
         maps,
         (issue) =>
@@ -296,6 +336,7 @@ export const makeGitHubAdapter = (
             // Lightweight by contract: child *states*, never their dependencies.
             const children = yield* subIssues(issue.number);
             const closed = children.filter((c) => c.state === "closed").length;
+
             return new MapDescriptor({
               id: ghId(repo, issue.number),
               title: issue.title,
@@ -312,12 +353,18 @@ export const makeGitHubAdapter = (
     const loadMapBody = (id: ResourceId) =>
       Effect.gen(function* () {
         const number = issueNumber(id);
-        if (number === null) return yield* new MapNotFound({ id: String(id) });
-        const issue = yield* required<Issue>(
+        if (number === null) {
+          return yield* new MapNotFound({ id: String(id) });
+        }
+
+        const issue = yield* required(
+          Issue,
           `/repos/${repo.owner}/${repo.repo}/issues/${number}`,
           () => new MapNotFound({ id: String(id) }),
         );
+
         const raw = issue.body ?? "";
+
         return new Body({ id, bodyHash: hashBody(raw), markdown: raw });
       });
 
@@ -345,10 +392,11 @@ export const makeGitHubAdapter = (
         ),
       );
 
-      const etag = response.headers["etag"];
+      const etag = response.headers.etag;
       if (etag !== undefined) {
         yield* Ref.update(etags, (m) => new Map(m).set(url, etag));
       }
+
       return response.status !== 304 && previous !== undefined;
     });
 
@@ -393,3 +441,7 @@ export const makeGitHubAdapter = (
       changes,
     } satisfies TrackerAdapter;
   });
+
+type TicketClassification = { type: TicketType; warning?: string };
+
+const unreachable = (reason: string) => new TrackerUnreachable({ tracker: "github", reason });

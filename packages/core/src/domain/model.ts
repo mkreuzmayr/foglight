@@ -57,7 +57,7 @@ export type TicketState = typeof TicketState.Type;
 export const ResourceId = Schema.String.pipe(Schema.brand("ResourceId"));
 export type ResourceId = typeof ResourceId.Type;
 
-export const makeId = (s: string): ResourceId => s as ResourceId;
+export const makeId = (s: string): ResourceId => ResourceId.make(s);
 
 /** Structure only. The question and resolution are in the ticket's Body. */
 export class TicketNode extends Schema.Class<TicketNode>("TicketNode")({
@@ -112,6 +112,7 @@ export const WarningKind = Schema.Literal(
   "decision-drift",
   "unreadable",
 );
+
 export type WarningKind = typeof WarningKind.Type;
 
 /** Degrade, don't fail: everything foglight could not fully understand. */

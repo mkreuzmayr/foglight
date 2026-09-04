@@ -5,12 +5,14 @@
  */
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { slugify } from "../parse/markdown.js";
-import { makeId, type ResourceId } from "./model.js";
+import { slugify } from "#core/parse/markdown.js";
+import { makeId } from "./model.js";
+import type { ResourceId } from "./model.js";
 
 export const idFor = (canonicalPath: string): string => {
   const name = slugify(basename(canonicalPath));
   const hash = createHash("sha256").update(canonicalPath).digest("hex").slice(0, 4);
+
   return `${name}-${hash}`;
 };
 

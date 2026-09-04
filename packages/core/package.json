@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#core/*.js": "./src/*.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./domain": "./src/domain/index.ts",

@@ -13,8 +13,8 @@
  * `.wayfinder/*.map.md`, each with its own `tickets/` beside it.
  */
 import { FileSystem, Path } from "@effect/platform";
-import { Duration, Effect, Option, Schedule, Stream } from "effect";
-import { MapNotFound, MapUnparseable, TrackerUnreachable } from "../domain/errors.js";
+import { Duration, Effect, Schema, Option, Schedule, Stream } from "effect";
+import { MapNotFound, MapUnparseable, TrackerUnreachable } from "#core/domain/errors.js";
 import {
   Body,
   MapDescriptor,
@@ -24,16 +24,22 @@ import {
   FogNode,
   OutOfScopeNode,
   makeId,
-  type ResourceId,
-  type TicketType,
-} from "../domain/model.js";
-import { fogId, outOfScopeId, parseMapBody, parseTicketBody, ticketDefect } from "../parse/body.js";
+  TicketType,
+} from "#core/domain/model.js";
+import type { ResourceId } from "#core/domain/model.js";
+import {
+  fogId,
+  outOfScopeId,
+  parseMapBody,
+  parseTicketBody,
+  ticketDefect,
+} from "#core/parse/body.js";
 import {
   hashBody,
   parseFrontmatter,
   parseInlineList,
   splitFrontmatter,
-} from "../parse/markdown.js";
+} from "#core/parse/markdown.js";
 import type { ChangeSignal, TrackerAdapter } from "./adapter.js";
 
 /**
@@ -68,8 +74,6 @@ export const makeLocalAdapter = (
     const abs = (relative: string) => path.join(repoRoot, relative);
     const rel = (absolute: string) => path.relative(repoRoot, absolute);
 
-    const unreachable = (reason: string) => new TrackerUnreachable({ tracker: "local", reason });
-
     const read = (relative: string) =>
       fs
         .readFileString(abs(relative))
@@ -78,16 +82,20 @@ export const makeLocalAdapter = (
     /** Resolved once: whichever of the accepted directory names this repo uses. */
     const wayfinderDir = yield* Effect.findFirst(WAYFINDER_DIRS, (candidate) =>
       fs.exists(abs(candidate)).pipe(Effect.orElseSucceed(() => false)),
-    ).pipe(Effect.map(Option.getOrElse(() => WAYFINDER_DIRS[0] as string)));
+    ).pipe(Effect.map(Option.getOrElse(() => WAYFINDER_DIRS[0])));
 
     /** Every map file in the wayfinder directory: `map.md` and any `*.map.md`. */
     const mapFiles = Effect.gen(function* () {
       const dir = abs(wayfinderDir);
       const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false));
-      if (!exists) return [] as ReadonlyArray<string>;
+      if (!exists) {
+        return [];
+      }
+
       const entries = yield* fs
         .readDirectory(dir)
         .pipe(Effect.mapError((cause) => unreachable(cause.message)));
+
       return entries
         .filter((name) => name === "map.md" || name.endsWith(".map.md"))
         .toSorted()
@@ -108,8 +116,11 @@ export const makeLocalAdapter = (
         if (base !== "map.md") {
           const named = `${dir}/tickets-${base.replace(/\.map\.md$/, "")}`;
           const exists = yield* fs.exists(abs(named)).pipe(Effect.orElseSucceed(() => false));
-          if (exists) return named;
+          if (exists) {
+            return named;
+          }
         }
+
         return `${dir}/tickets`;
       });
 
@@ -117,7 +128,9 @@ export const makeLocalAdapter = (
       Effect.gen(function* () {
         const dir = yield* ticketDirFor(mapRelative);
         const exists = yield* fs.exists(abs(dir)).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) return [] as ReadonlyArray<TicketFile>;
+        if (!exists) {
+          return [];
+        }
 
         const names = yield* fs
           .readDirectory(abs(dir))
@@ -130,6 +143,7 @@ export const makeLocalAdapter = (
               const relative = `${dir}/${name}`;
               const raw = yield* read(relative);
               const { frontmatter, body } = splitFrontmatter(raw);
+
               return {
                 // The filename's leading NNN is the id — TRACKER.md's rule.
                 shortId: /^(\d+)/.exec(name)?.[1] ?? name.replace(/\.md$/, ""),
@@ -143,29 +157,67 @@ export const makeLocalAdapter = (
         );
       });
 
-    const ticketType = (file: TicketFile): { type: TicketType; warning?: string } => {
+    const ticketType = (file: TicketFile): TicketClassification => {
       // `labels:` is the documented key, but `label:` is common in the wild —
       // and getting this wrong is loud: every ticket would be marked malformed
       // for a missing type, which buries any real defect in the noise.
       const labels = [
-        ...parseInlineList(file.frontmatter["labels"]),
-        ...parseInlineList(file.frontmatter["label"]),
+        ...parseInlineList(file.frontmatter.labels),
+        ...parseInlineList(file.frontmatter.label),
       ];
+
       const found = labels
         .map((l) => l.replace(/^wayfinder:/, ""))
-        .find((l) => TICKET_TYPES.has(l));
-      if (found !== undefined) return { type: found as TicketType };
+        .find((l) => Schema.is(TicketType)(l));
+
+      if (found !== undefined && Schema.is(TicketType)(found)) {
+        return { type: found };
+      }
+
       return {
         type: "grilling", // the default ticket type per the wayfinder skill
         warning: `no \`wayfinder:<type>\` label (expected ${[...TICKET_TYPES].join(" | ")})`,
       };
     };
 
+    const buildTicket = (file: TicketFile, warnings: MapWarning[]): TicketNode => {
+      const ticketId = localId(file.relative);
+      const parsed = parseTicketBody(file.body);
+      const { type, warning } = ticketType(file);
+      const defect = ticketDefect(parsed) ?? warning;
+
+      if (defect !== undefined) {
+        warnings.push(
+          new MapWarning({
+            kind: "malformed-ticket",
+            subject: ticketId,
+            message: `${path.basename(file.relative)}: ${defect}`,
+          }),
+        );
+      }
+
+      const assignee = (file.frontmatter.assignee ?? "").trim();
+
+      return new TicketNode({
+        id: ticketId,
+        shortId: file.shortId,
+        title: file.frontmatter.title ?? path.basename(file.relative, ".md"),
+        type,
+        status: file.frontmatter.status === "closed" ? "closed" : "open",
+        assignee: assignee.length > 0 ? assignee : null,
+        blockedBy: parseInlineList(file.frontmatter["blocked-by"]),
+        bodyHash: hashBody(file.raw),
+        ...(defect === undefined ? {} : { malformed: defect }),
+      });
+    };
+
     const loadMap = (id: ResourceId) =>
       Effect.gen(function* () {
         const relative = unqualify(id);
         const exists = yield* fs.exists(abs(relative)).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) return yield* new MapNotFound({ id: String(id) });
+        if (!exists) {
+          return yield* new MapNotFound({ id: String(id) });
+        }
 
         const raw = yield* read(relative);
         const { frontmatter, body } = splitFrontmatter(raw);
@@ -173,39 +225,7 @@ export const makeLocalAdapter = (
         const files = yield* readTickets(relative);
 
         const warnings: MapWarning[] = [];
-        const tickets: TicketNode[] = [];
-
-        for (const file of files) {
-          const ticketId = localId(file.relative);
-          const parsed = parseTicketBody(file.body);
-          const { type, warning } = ticketType(file);
-          const defect = ticketDefect(parsed) ?? warning;
-
-          if (defect !== undefined) {
-            warnings.push(
-              new MapWarning({
-                kind: "malformed-ticket",
-                subject: ticketId,
-                message: `${path.basename(file.relative)}: ${defect}`,
-              }),
-            );
-          }
-
-          const assignee = (file.frontmatter["assignee"] ?? "").trim();
-          tickets.push(
-            new TicketNode({
-              id: ticketId,
-              shortId: file.shortId,
-              title: file.frontmatter["title"] ?? path.basename(file.relative, ".md"),
-              type,
-              status: file.frontmatter["status"] === "closed" ? "closed" : "open",
-              assignee: assignee.length > 0 ? assignee : null,
-              blockedBy: parseInlineList(file.frontmatter["blocked-by"]),
-              bodyHash: hashBody(file.raw),
-              ...(defect === undefined ? {} : { malformed: defect }),
-            }),
-          );
-        }
+        const tickets = files.map((file) => buildTicket(file, warnings));
 
         // A ticket's id is the filename's `NNN`, but authors write `blocked-by:
         // [1, 6]` — the number, not the zero-padded form. Both spellings mean
@@ -219,9 +239,10 @@ export const makeLocalAdapter = (
             byShortId.set(String(Number(ticket.shortId)), ticket.shortId);
           }
         }
-        const canonical = (raw: string): string | undefined =>
-          byShortId.get(raw) ??
-          (/^\d+$/.test(raw) ? byShortId.get(String(Number(raw))) : undefined);
+
+        const canonical = (reference: string): string | undefined =>
+          byShortId.get(reference) ??
+          (/^\d+$/.test(reference) ? byShortId.get(String(Number(reference))) : undefined);
 
         // Dangling edges drop with a warning rather than pinning a ticket shut.
         const resolved = tickets.map((ticket) => {
@@ -235,10 +256,22 @@ export const makeLocalAdapter = (
               }),
             );
           }
+
           // Always rebuilt, never short-circuited on an unchanged length: the
           // list may be the same size and still need rewriting from `1` to
           // `001`, which is the whole point of resolving it.
-          return new TicketNode({ ...ticket, blockedBy: live });
+          return new TicketNode({
+            id: ticket.id,
+            shortId: ticket.shortId,
+            title: ticket.title,
+            type: ticket.type,
+            status: ticket.status,
+            assignee: ticket.assignee,
+            bodyHash: ticket.bodyHash,
+            malformed: ticket.malformed,
+            graduatedFrom: ticket.graduatedFrom,
+            blockedBy: live,
+          });
         });
 
         const parsedBody = parseMapBody(body, resolved);
@@ -254,6 +287,7 @@ export const makeLocalAdapter = (
         const closedTitles = new Set(
           resolved.filter((t) => t.status === "closed").map((t) => t.title.toLowerCase()),
         );
+
         for (const decision of parsedBody.decisions) {
           if (!closedTitles.has(decision.title.toLowerCase())) {
             warnings.push(
@@ -268,7 +302,7 @@ export const makeLocalAdapter = (
 
         return new MapSnapshot({
           id,
-          title: meta["title"] ?? path.basename(relative, ".md"),
+          title: meta.title ?? path.basename(relative, ".md"),
           destination: parsedBody.destination,
           tracker: "local",
           revision: 0, // stamped by the server, which owns the monotonic counter
@@ -300,6 +334,7 @@ export const makeLocalAdapter = (
 
     const listMaps = Effect.gen(function* () {
       const files = yield* mapFiles;
+
       return yield* Effect.forEach(
         files,
         (relative) =>
@@ -315,11 +350,11 @@ export const makeLocalAdapter = (
             // Lightweight by contract: ticket *statuses* only, never their
             // dependencies — reading those is what `loadMap` is for.
             const ticketFiles = yield* readTickets(relative);
-            const closed = ticketFiles.filter((f) => f.frontmatter["status"] === "closed").length;
+            const closed = ticketFiles.filter((f) => f.frontmatter.status === "closed").length;
 
             return new MapDescriptor({
               id: localId(relative),
-              title: meta["title"] ?? path.basename(relative, ".md"),
+              title: meta.title ?? path.basename(relative, ".md"),
               destination: parsed.destination,
               openCount: ticketFiles.length - closed,
               closedCount: closed,
@@ -336,8 +371,12 @@ export const makeLocalAdapter = (
       Effect.gen(function* () {
         const relative = unqualify(id);
         const exists = yield* fs.exists(abs(relative)).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) return yield* new MapNotFound({ id: String(id) });
+        if (!exists) {
+          return yield* new MapNotFound({ id: String(id) });
+        }
+
         const raw = yield* read(relative);
+
         return new Body({ id, bodyHash: hashBody(raw), markdown: splitFrontmatter(raw).body });
       });
 
@@ -345,8 +384,12 @@ export const makeLocalAdapter = (
       Effect.gen(function* () {
         const relative = unqualify(ticketId);
         const exists = yield* fs.exists(abs(relative)).pipe(Effect.orElseSucceed(() => false));
-        if (!exists) return yield* new MapNotFound({ id: String(ticketId) });
+        if (!exists) {
+          return yield* new MapNotFound({ id: String(ticketId) });
+        }
+
         const raw = yield* read(relative);
+
         return new Body({
           id: ticketId,
           bodyHash: hashBody(raw),
@@ -400,3 +443,7 @@ export const makeLocalAdapter = (
       changes,
     } satisfies TrackerAdapter;
   });
+
+type TicketClassification = { type: TicketType; warning?: string };
+
+const unreachable = (reason: string) => new TrackerUnreachable({ tracker: "local", reason });

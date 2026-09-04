@@ -17,13 +17,13 @@
  * batched.
  */
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "@effect/platform";
-import { Body, MapDescriptor, MapSnapshot, Project } from "../domain/model.js";
+import { Body, MapDescriptor, MapSnapshot, Project } from "#core/domain/model.js";
 import {
   MapNotFound,
   MapUnparseable,
   TrackerUnauthenticated,
   TrackerUnreachable,
-} from "../domain/errors.js";
+} from "#core/domain/errors.js";
 import { Schema } from "effect";
 
 /**

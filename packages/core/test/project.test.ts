@@ -3,7 +3,7 @@
  * Adapters never see this; qualification happens in the session layer.
  */
 import { describe, expect, it } from "vitest";
-import { idFor, qualify } from "../src/domain/project.js";
+import { idFor, qualify } from "#core/domain/project.js";
 
 describe("project identity", () => {
   it("names a project from its folder basename and a short hash of the path", () => {

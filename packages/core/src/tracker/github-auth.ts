@@ -8,12 +8,13 @@
  * crash and never an anonymous request that later 404s confusingly on a private
  * repo.
  */
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command } from "@effect/platform";
+import type { CommandExecutor } from "@effect/platform";
 import { Effect, Option } from "effect";
-import { TrackerUnauthenticated } from "../domain/errors.js";
+import { TrackerUnauthenticated } from "#core/domain/errors.js";
 
 const fromEnv = Effect.sync(() =>
-  Option.fromNullable(process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"]).pipe(
+  Option.fromNullable(process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN).pipe(
     Option.filter((t) => t.trim().length > 0),
   ),
 );
@@ -35,10 +36,14 @@ export const resolveToken: Effect.Effect<
   CommandExecutor.CommandExecutor
 > = Effect.gen(function* () {
   const env = yield* fromEnv;
-  if (Option.isSome(env)) return env.value;
+  if (Option.isSome(env)) {
+    return env.value;
+  }
 
   const cli = yield* fromGhCli;
-  if (Option.isSome(cli)) return cli.value;
+  if (Option.isSome(cli)) {
+    return cli.value;
+  }
 
   return yield* new TrackerUnauthenticated({
     tracker: "github",
