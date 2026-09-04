@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 /**
  * The server, end to end, against this repo's own `.wayfinder/`.
  *
@@ -14,9 +15,10 @@ import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { idFor, makeId, MapNotFound, type PollMode, type TrackerAdapter } from "@foglight/core";
-import { AppLayer, attachProject, boundAddress, detachProject } from "../src/index.js";
-import { MapStore, layer as storeLayer } from "../src/store.js";
+import { idFor, makeId, MapNotFound } from "@foglight/core";
+import type { PollMode, TrackerAdapter } from "@foglight/core";
+import { AppLayer, attachProject, boundAddress, detachProject } from "#server/index.js";
+import { MapStore, layer as storeLayer } from "#server/store.js";
 
 const repoRoot = new URL("../../../", import.meta.url).pathname;
 const canonicalPath = realpathSync(repoRoot);
@@ -24,8 +26,8 @@ const PROJECT_ID = idFor(canonicalPath);
 const MAP_ID = `${PROJECT_ID}:local:.wayfinder/map.md`;
 const encoded = encodeURIComponent(MAP_ID);
 
-let baseUrl = "";
-let stop: () => void = () => {};
+type ServerState = { baseUrl: string; stop: () => void };
+const serverState: ServerState = { baseUrl: "", stop: () => undefined };
 
 beforeAll(async () => {
   const layer = AppLayer({
@@ -44,15 +46,15 @@ beforeAll(async () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
-  baseUrl = await started.promise;
-  stop = () => void Effect.runFork(Fiber.interrupt(fiber));
+  serverState.baseUrl = await started.promise;
+  serverState.stop = () => void Effect.runFork(Fiber.interrupt(fiber));
 }, 30_000);
 
-afterAll(() => stop());
+afterAll(() => serverState.stop());
 
 describe("api", () => {
   it("lists the attached folder as a project", async () => {
-    const response = await fetch(`${baseUrl}/api/projects`);
+    const response = await fetch(`${serverState.baseUrl}/api/projects`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([
       {
@@ -66,16 +68,18 @@ describe("api", () => {
   });
 
   it("lists this repo's maps", async () => {
-    const response = await fetch(`${baseUrl}/api/maps`);
+    const response = await fetch(`${serverState.baseUrl}/api/maps`);
     expect(response.status).toBe(200);
-    const maps = (await response.json()) as Array<{
+    const maps = (await response.json()) as {
       id: string;
       project?: { id: string; name: string };
-    }>;
-    expect(maps.map((m) => m.id).sort()).toEqual([
+    }[];
+
+    expect(maps.map((m) => m.id).toSorted()).toEqual([
       `${PROJECT_ID}:local:.wayfinder/map.md`,
       `${PROJECT_ID}:local:.wayfinder/project-handling.map.md`,
     ]);
+
     expect(
       maps.every(
         (m) => m.project?.id === PROJECT_ID && m.project?.name === basename(canonicalPath),
@@ -86,7 +90,7 @@ describe("api", () => {
   it("serves a snapshot under a percent-encoded id", async () => {
     // Map ids contain `:` and `/`. If the router decoded before matching, this
     // would 404 — and the failure would only ever show up at runtime.
-    const response = await fetch(`${baseUrl}/api/maps/${encoded}`);
+    const response = await fetch(`${serverState.baseUrl}/api/maps/${encoded}`);
     expect(response.status).toBe(200);
     const snapshot = (await response.json()) as {
       tickets: unknown[];
@@ -94,6 +98,7 @@ describe("api", () => {
       id: string;
       project?: { id: string; name: string };
     };
+
     expect(snapshot.id).toBe(MAP_ID);
     expect(snapshot.project).toEqual({ id: PROJECT_ID, name: basename(canonicalPath) });
     expect(snapshot.tickets).toHaveLength(10);
@@ -102,20 +107,22 @@ describe("api", () => {
 
   it("qualifies nested resource ids on a snapshot", async () => {
     const handling = encodeURIComponent(`${PROJECT_ID}:local:.wayfinder/project-handling.map.md`);
-    const response = await fetch(`${baseUrl}/api/maps/${handling}`);
+    const response = await fetch(`${serverState.baseUrl}/api/maps/${handling}`);
     expect(response.status).toBe(200);
     const snapshot = (await response.json()) as {
-      tickets: Array<{ id: string; graduatedFrom?: string }>;
-      fog: Array<{ id: string }>;
-      outOfScope: Array<{ id: string }>;
-      warnings: Array<{ subject: string | null }>;
+      tickets: { id: string; graduatedFrom?: string }[];
+      fog: { id: string }[];
+      outOfScope: { id: string }[];
+      warnings: { subject: string | null }[];
     };
+
     const prefixed = (id: string) => id.startsWith(`${PROJECT_ID}:`);
     expect(snapshot.tickets.length).toBeGreaterThan(0);
     expect(snapshot.tickets.every((t) => prefixed(t.id))).toBe(true);
     expect(
       snapshot.tickets.every((t) => t.graduatedFrom === undefined || prefixed(t.graduatedFrom)),
     ).toBe(true);
+
     expect(snapshot.fog.length).toBeGreaterThan(0);
     expect(snapshot.fog.every((f) => prefixed(f.id))).toBe(true);
     expect(snapshot.outOfScope.length).toBeGreaterThan(0);
@@ -124,13 +131,14 @@ describe("api", () => {
 
     const ticketId = snapshot.tickets[0]!.id;
     const body = await fetch(
-      `${baseUrl}/api/maps/${handling}/tickets/${encodeURIComponent(ticketId)}/body`,
+      `${serverState.baseUrl}/api/maps/${handling}/tickets/${encodeURIComponent(ticketId)}/body`,
     );
+
     expect(body.status).toBe(200);
   });
 
   it("serves the map body separately from its structure", async () => {
-    const response = await fetch(`${baseUrl}/api/maps/${encoded}/body`);
+    const response = await fetch(`${serverState.baseUrl}/api/maps/${encoded}/body`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { markdown: string; bodyHash: string };
     expect(body.markdown).toContain("## Destination");
@@ -139,25 +147,31 @@ describe("api", () => {
 
   it("serves a ticket body", async () => {
     const ticketId = encodeURIComponent("local:.wayfinder/tickets/005-map-graph-ui-prototype.md");
-    const response = await fetch(`${baseUrl}/api/maps/${encoded}/tickets/${ticketId}/body`);
+    const response = await fetch(
+      `${serverState.baseUrl}/api/maps/${encoded}/tickets/${ticketId}/body`,
+    );
+
     expect(response.status).toBe(200);
     const body = (await response.json()) as { markdown: string };
     expect(body.markdown).toContain("## Question");
   });
 
   it("gives a named 404 for a map that isn't there", async () => {
-    const response = await fetch(`${baseUrl}/api/maps/${encodeURIComponent("local:nope.md")}`);
+    const response = await fetch(
+      `${serverState.baseUrl}/api/maps/${encodeURIComponent("local:nope.md")}`,
+    );
+
     expect(response.status).toBe(404);
     expect(((await response.json()) as { _tag: string })._tag).toBe("MapNotFound");
   });
 
   it("404s an unknown path rather than serving index.html", async () => {
     // Addressing is query params, so there is no SPA catch-all to fall into.
-    expect((await fetch(`${baseUrl}/some/deep/path`)).status).toBe(404);
+    expect((await fetch(`${serverState.baseUrl}/some/deep/path`)).status).toBe(404);
   });
 
   it("serves the client bundle at the root", async () => {
-    const response = await fetch(`${baseUrl}/`);
+    const response = await fetch(`${serverState.baseUrl}/`);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('<div id="root">');
   });
@@ -165,34 +179,43 @@ describe("api", () => {
 
 describe("sse", () => {
   it("opens with a complete truth, then pushes a newer revision on change", async () => {
-    const response = await fetch(`${baseUrl}/api/events?map=${encoded}`);
+    const response = await fetch(`${serverState.baseUrl}/api/events?map=${encoded}`);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
 
-    const reader = response.body!.getReader();
+    const reader: ReadableStreamDefaultReader<Uint8Array> = response.body!.getReader();
     const decoder = new TextDecoder();
-    let buffered = "";
+    type StreamState = { buffered: string };
+    const streamState: StreamState = { buffered: "" };
     const revisions: number[] = [];
     const events: string[] = [];
 
     const pump = (async () => {
       while (revisions.length < 2) {
         const { value, done } = await reader.read();
-        if (done) break;
-        buffered += decoder.decode(value, { stream: true });
-        for (const match of buffered.matchAll(/^event: (\w+)$/gm)) events.push(match[1]!);
-        for (const match of buffered.matchAll(/^id: (\d+)$/gm)) {
+        if (done) {
+          break;
+        }
+
+        streamState.buffered += decoder.decode(value, { stream: true });
+        for (const match of streamState.buffered.matchAll(/^event: (\w+)$/gm)) {
+          events.push(match[1]!);
+        }
+
+        for (const match of streamState.buffered.matchAll(/^id: (\d+)$/gm)) {
           const revision = Number(match[1]);
-          if (!revisions.includes(revision)) revisions.push(revision);
+          if (!revisions.includes(revision)) {
+            revisions.push(revision);
+          }
         }
       }
     })();
 
     // Give the initial burst a moment, then move the map.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await delay(500);
     const now = new Date();
     await utimes(`${repoRoot}.wayfinder/map.md`, now, now);
 
-    await Promise.race([pump, new Promise((resolve) => setTimeout(resolve, 8000))]);
+    await Promise.race([pump, delay(8000)]);
     void reader.cancel();
 
     expect(events).toContain("maps");
@@ -206,39 +229,39 @@ describe("sse", () => {
 });
 
 describe("empty session", () => {
-  let url = "";
-  let runtime: ManagedRuntime.ManagedRuntime<any, any>;
+  const runtime = ManagedRuntime.make(
+    AppLayer({ host: "127.0.0.1", port: 0, clientDir: `${repoRoot}packages/client/dist` }),
+  );
+
+  const sessionState = { url: "" };
 
   beforeAll(async () => {
-    const layer = AppLayer({
-      host: "127.0.0.1",
-      port: 0,
-      clientDir: `${repoRoot}packages/client/dist`,
-    });
-    runtime = ManagedRuntime.make(layer);
     const address = await runtime.runPromise(
       boundAddress.pipe(Effect.map((bound) => (bound._tag === "TcpAddress" ? bound.port : 0))),
     );
-    url = `http://127.0.0.1:${address}`;
+
+    sessionState.url = `http://127.0.0.1:${address}`;
   }, 30_000);
 
-  afterAll(() => void runtime.dispose());
+  afterAll(async () => {
+    await runtime.dispose();
+  });
 
   it("lists no projects", async () => {
-    const response = await fetch(`${url}/api/projects`);
+    const response = await fetch(`${sessionState.url}/api/projects`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([]);
   });
 
   it("treats detach of an unknown path as a no-op", async () => {
     await runtime.runPromise(detachProject({ path: "/no/such/foglight-project" }));
-    const response = await fetch(`${url}/api/projects`);
+    const response = await fetch(`${sessionState.url}/api/projects`);
     expect(await response.json()).toEqual([]);
   });
 
   it("attaches a folder as a project", async () => {
     await runtime.runPromise(attachProject({ path: canonicalPath }));
-    const response = await fetch(`${url}/api/projects`);
+    const response = await fetch(`${sessionState.url}/api/projects`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([
       {
@@ -252,9 +275,9 @@ describe("empty session", () => {
   });
 
   it("lists maps of a project attached at runtime", async () => {
-    const response = await fetch(`${url}/api/maps`);
+    const response = await fetch(`${sessionState.url}/api/maps`);
     expect(response.status).toBe(200);
-    const maps = (await response.json()) as Array<{ id: string }>;
+    const maps = (await response.json()) as { id: string }[];
     expect(maps.map((m) => m.id)).toContain(MAP_ID);
   });
 
@@ -262,20 +285,20 @@ describe("empty session", () => {
     const result = await runtime.runPromise(
       attachProject({ path: "/no/such/foglight-project" }).pipe(Effect.either),
     );
+
     expect(result._tag).toBe("Left");
-    if (result._tag === "Left") {
-      expect((result.left as { _tag: string })._tag).toBe("ProjectPathInvalid");
-    }
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ProjectPathInvalid" } });
   });
 
   it("attaches a folder with no tracker as an empty project", async () => {
     const dir = await mkdtemp(join(tmpdir(), "foglight-empty-"));
     await runtime.runPromise(attachProject({ path: dir }));
-    const projects = (await (await fetch(`${url}/api/projects`)).json()) as Array<{
+    const projects = (await (await fetch(`${sessionState.url}/api/projects`)).json()) as {
       path: string;
       state: string;
       trackerKind?: string;
-    }>;
+    }[];
+
     const attached = projects.find((p) => p.path === realpathSync(dir));
     expect(attached?.state).toBe("no-tracker");
     expect(attached?.trackerKind).toBeUndefined();
@@ -284,11 +307,12 @@ describe("empty session", () => {
   it("attaches a forced tracker that cannot resolve as an error project", async () => {
     const dir = await mkdtemp(join(tmpdir(), "foglight-forced-"));
     await runtime.runPromise(attachProject({ path: dir, tracker: "local" }));
-    const projects = (await (await fetch(`${url}/api/projects`)).json()) as Array<{
+    const projects = (await (await fetch(`${sessionState.url}/api/projects`)).json()) as {
       path: string;
       state: string;
       trackerKind?: string;
-    }>;
+    }[];
+
     const attached = projects.find((p) => p.path === realpathSync(dir));
     expect(attached?.state).toBe("error");
     expect(attached?.trackerKind).toBe("local");
@@ -315,48 +339,59 @@ describe("empty session", () => {
     );
 
     const deadline = Date.now() + 5000;
-    let state: string | undefined = "no-tracker";
+    type Observed = { state: string | undefined };
+    const observed: Observed = { state: "no-tracker" };
     while (Date.now() < deadline) {
-      const projects = (await (await fetch(`${url}/api/projects`)).json()) as Array<{
+      const projects = (await (await fetch(`${sessionState.url}/api/projects`)).json()) as {
         path: string;
         state: string;
-      }>;
-      state = projects.find((p) => p.path === canonical)?.state;
-      if (state === "ready") break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      }[];
+
+      observed.state = projects.find((p) => p.path === canonical)?.state;
+      if (observed.state === "ready") {
+        break;
+      }
+
+      await delay(50);
     }
-    expect(state).toBe("ready");
-    const maps = (await (await fetch(`${url}/api/maps`)).json()) as Array<{ id: string }>;
+
+    expect(observed.state).toBe("ready");
+    const maps = (await (await fetch(`${sessionState.url}/api/maps`)).json()) as { id: string }[];
     expect(maps.some((m) => m.id === `${idFor(canonical)}:local:.wayfinder/map.md`)).toBe(true);
   }, 10_000);
 
   it("pushes a projects event when a project attaches or detaches", async () => {
     const dir = await mkdtemp(join(tmpdir(), "foglight-sse-"));
     const canonical = realpathSync(dir);
-    const response = await fetch(`${url}/api/events`);
-    const reader = response.body!.getReader();
+    const response = await fetch(`${sessionState.url}/api/events`);
+    const reader: ReadableStreamDefaultReader<Uint8Array> = response.body!.getReader();
     const decoder = new TextDecoder();
-    let buffered = "";
-    const lists: Array<Array<{ path: string }>> = [];
+    type StreamState = { buffered: string };
+    const streamState: StreamState = { buffered: "" };
+    const lists: { path: string }[][] = [];
 
     const pump = (async () => {
       while (lists.length < 3) {
         const { value, done } = await reader.read();
-        if (done) break;
-        buffered += decoder.decode(value, { stream: true });
-        const chunks = [...buffered.matchAll(/^event: projects\ndata: (\{.*\})$/gm)];
+        if (done) {
+          break;
+        }
+
+        streamState.buffered += decoder.decode(value, { stream: true });
+        const chunks = [...streamState.buffered.matchAll(/^event: projects\ndata: (\{.*\})$/gm)];
         lists.length = 0;
         for (const chunk of chunks) {
-          lists.push(JSON.parse(chunk[1]!).projects as Array<{ path: string }>);
+          const payload = JSON.parse(chunk[1]!) as { projects: { path: string }[] };
+          lists.push(payload.projects);
         }
       }
     })();
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await delay(300);
     await runtime.runPromise(attachProject({ path: dir }));
     await runtime.runPromise(detachProject({ path: dir }));
 
-    await Promise.race([pump, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    await Promise.race([pump, delay(5000)]);
     void reader.cancel();
 
     expect(lists.some((projects) => projects.some((p) => p.path === canonical))).toBe(true);
@@ -365,6 +400,7 @@ describe("empty session", () => {
     const detached = lists.findIndex(
       (projects, i) => i > attached && !projects.some((p) => p.path === canonical),
     );
+
     expect(attached).toBeGreaterThanOrEqual(0);
     expect(detached).toBeGreaterThan(attached);
   }, 10_000);
@@ -386,25 +422,30 @@ describe("empty session", () => {
         "",
       ].join("\n"),
     );
+
     const second = realpathSync(dir);
     await runtime.runPromise(attachProject({ path: dir }));
     await runtime.runPromise(attachProject({ path: canonicalPath }));
 
-    const projects = (await (await fetch(`${url}/api/projects`)).json()) as Array<{
+    const projects = (await (await fetch(`${sessionState.url}/api/projects`)).json()) as {
       path: string;
       state: string;
-    }>;
+    }[];
+
     expect(projects.some((p) => p.path === canonicalPath && p.state === "ready")).toBe(true);
     expect(projects.some((p) => p.path === second && p.state === "ready")).toBe(true);
 
-    const maps = (await (await fetch(`${url}/api/maps`)).json()) as Array<{ id: string }>;
+    const maps = (await (await fetch(`${sessionState.url}/api/maps`)).json()) as { id: string }[];
     expect(maps.map((m) => m.id)).toContain(MAP_ID);
     expect(maps.map((m) => m.id)).toContain(`${idFor(second)}:local:.wayfinder/map.md`);
   });
 
   it("removes a project on detach", async () => {
     await runtime.runPromise(detachProject({ path: canonicalPath }));
-    const projects = (await (await fetch(`${url}/api/projects`)).json()) as Array<{ path: string }>;
+    const projects = (await (await fetch(`${sessionState.url}/api/projects`)).json()) as {
+      path: string;
+    }[];
+
     expect(projects.some((p) => p.path === canonicalPath)).toBe(false);
   });
 });
@@ -426,6 +467,7 @@ describe("cadence", () => {
     const runtime = ManagedRuntime.make(
       storeLayer(silentAdapter("a/a"), cadenceA, { id: "proj-a", name: "A" }),
     );
+
     const modes = await runtime.runPromise(
       Effect.gen(function* () {
         const store = yield* MapStore;
@@ -434,23 +476,28 @@ describe("cadence", () => {
           project: { id: "proj-b", name: "B" },
           cadence: cadenceB,
         });
+
         const fiber = yield* store
           .subscribe(makeId("proj-a:github:a/a#1"))
           .pipe(Stream.runDrain, Effect.fork);
+
         yield* Effect.sleep(Duration.millis(80));
         const watching = {
           a: yield* SubscriptionRef.get(cadenceA),
           b: yield* SubscriptionRef.get(cadenceB),
         };
+
         yield* Fiber.interrupt(fiber);
         yield* Effect.sleep(Duration.millis(80));
         const idle = {
           a: yield* SubscriptionRef.get(cadenceA),
           b: yield* SubscriptionRef.get(cadenceB),
         };
+
         return { watching, idle };
       }),
     );
+
     await runtime.dispose();
     expect(modes.watching).toEqual({ a: "active", b: "idle" });
     expect(modes.idle).toEqual({ a: "paused", b: "paused" });
