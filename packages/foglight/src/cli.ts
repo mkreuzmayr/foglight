@@ -11,14 +11,15 @@
  * no `workspace:*` dependency and the tarball is the whole download.
  */
 import { NodeContext } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAttacher } from "./attacher.js";
-import { DEFAULT_PORT, HELP, parseArgv, type Command } from "./argv.js";
+import { DEFAULT_PORT, HELP, parseArgv } from "./argv.js";
+import type { Command } from "./argv.js";
 import { runDaemonFromFlags } from "./daemon.js";
 import { Hello } from "./protocol.js";
 import { hostLayout } from "./layout.js";
@@ -30,8 +31,8 @@ const CLIENT_DIR = join(here, "client");
 
 const version = (): string => {
   try {
-    return (
-      JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as { version: string }
+    return Schema.decodeUnknownSync(Schema.parseJson(Schema.Struct({ version: Schema.String })))(
+      readFileSync(join(here, "..", "package.json"), "utf8"),
     ).version;
   } catch {
     return "0.0.0";
@@ -50,20 +51,22 @@ const die = (message: string): never => {
  * reach GitHub, **it fails here, at launch, not at install**. The message says
  * so, names `ELECTRON_MIRROR`, and points at the alternative that works.
  */
-const launchGui = (command: Extract<Command, { kind: "gui" }>): void => {
+const resolveElectron = (): string => {
   const require = createRequire(import.meta.url);
-  let electronPath: string;
   try {
-    electronPath = require("electron") as string;
+    return Schema.decodeUnknownSync(Schema.String)(require("electron"));
   } catch {
-    return void die(
+    return die(
       "foglight: could not resolve the Electron binary.\n" +
         "  Electron downloads on first GUI launch, so this usually means no network or a blocked github.com.\n" +
         "  Set ELECTRON_MIRROR to a reachable mirror, or run `foglight serve` instead —\n" +
         "  headless needs no Electron binary at all.",
     );
   }
+};
 
+const launchGui = (command: Extract<Command, { kind: "gui" }>): void => {
+  const electronPath = resolveElectron();
   const child = spawn(electronPath, [join(here, "electron", "main.js")], {
     stdio: "inherit",
     env: {
@@ -74,6 +77,7 @@ const launchGui = (command: Extract<Command, { kind: "gui" }>): void => {
       ...(command.tracker === null ? {} : { FOGLIGHT_TRACKER: command.tracker }),
     },
   });
+
   child.on("exit", (code) => process.exit(code ?? 0));
 };
 
@@ -94,16 +98,12 @@ const runAttached = async (
   command: Extract<Command, { kind: "serve" }> | Extract<Command, { kind: "status" }>,
 ): Promise<void> => {
   const layout = hostLayout();
-  if (layout.warning !== undefined) console.error(`foglight: ${layout.warning}`);
+  if (layout.warning !== undefined) {
+    console.error(`foglight: ${layout.warning}`);
+  }
 
   const serve = command.kind === "serve" ? command : null;
-  const flags = {
-    host: serve?.host ?? "127.0.0.1",
-    port: serve?.port ?? 4747,
-    tailscale: serve?.tailscale ?? false,
-    tailscaleServe: serve?.tailscaleServe ?? false,
-    tailscaleServePort: serve?.tailscaleServePort ?? 4747,
-  };
+  const flags = flagsFor(serve);
 
   const hello = Hello.make({
     type: "hello",
@@ -133,6 +133,7 @@ const runAttached = async (
       printQr: (url) => Effect.promise(() => printQrCode(url)),
     }).pipe(Effect.provide(NodeContext.layer)),
   );
+
   process.exit(code);
 };
 
@@ -142,22 +143,34 @@ const main = async (): Promise<void> => {
   switch (command.kind) {
     case "help":
       console.log(HELP);
+
       return;
+
     case "version":
       console.log(version());
+
       return;
+
     case "error":
       die(`foglight: ${command.message}\n\nRun \`foglight --help\`.`);
+
       return;
+
     case "gui":
       launchGui(command);
+
       return;
+
     case "status":
       await runAttached(command);
+
       return;
+
     case "serve":
       await runAttached(command);
+
       return;
+
     case "daemon":
       await runDaemonFromFlags(
         {
@@ -173,8 +186,20 @@ const main = async (): Promise<void> => {
   }
 };
 
-void main().catch((error: unknown) => {
+export { DEFAULT_PORT };
+
+const flagsFor = (serve: Extract<Command, { kind: "serve" }> | null) => {
+  const { host, port, tailscale, tailscaleServe, tailscaleServePort } = serve ?? {
+    host: "127.0.0.1",
+    port: DEFAULT_PORT,
+    tailscale: false,
+    tailscaleServe: false,
+    tailscaleServePort: DEFAULT_PORT,
+  };
+
+  return { host, port, tailscale, tailscaleServe, tailscaleServePort };
+};
+
+void main().catch((error) => {
   die(error instanceof Error ? error.message : String(error));
 });
-
-export { DEFAULT_PORT };

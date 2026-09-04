@@ -63,125 +63,177 @@ Options for both:
 Foglight never writes to your tracker, and never terminates TLS itself.
 `;
 
-const takeValue = (args: ReadonlyArray<string>, index: number, flag: string): string => {
-  const value = args[index + 1];
-  if (value === undefined || value.startsWith("-")) {
-    throw new Error(`${flag} needs a value`);
-  }
-  return value;
+type ParsedFlags = {
+  repoRoot: string;
+  tracker: TrackerChoice;
+  host: string;
+  port: number;
+  tailscale: boolean;
+  tailscaleServe: boolean;
+  tailscaleServePort: number;
+  verbose: boolean;
 };
 
-export const parseArgv = (argv: ReadonlyArray<string>, cwd: string): Command => {
-  const args = argv.slice(2);
-  if (args.includes("-h") || args.includes("--help")) return { kind: "help" };
-  if (args.includes("-v") || args.includes("--version")) return { kind: "version" };
-
-  if (args[0] === "status") return { kind: "status" };
-
-  const serve = args[0] === "serve";
-  const daemon = args[0] === "daemon";
-  const rest = serve || daemon ? args.slice(1) : args;
-
-  let repoRoot = cwd;
-  let tracker: TrackerChoice = null;
-  let host = DEFAULT_HOST;
-  let port = DEFAULT_PORT;
-  let tailscale = false;
-  let tailscaleServe = false;
-  let tailscaleServePort = 0;
-  let verbose = false;
-
-  try {
-    for (let i = 0; i < rest.length; i += 1) {
-      const arg = rest[i];
-      if (arg === undefined) continue;
-      switch (arg) {
-        case "--tracker": {
-          const value = takeValue(rest, i, "--tracker");
-          if (value !== "local" && value !== "github") {
-            return { kind: "error", message: `--tracker must be local or github, not "${value}"` };
-          }
-          tracker = value;
-          i += 1;
-          break;
-        }
-        case "--host":
-          host = takeValue(rest, i, "--host");
-          i += 1;
-          break;
-        case "--port":
-          port = Number(takeValue(rest, i, "--port"));
-          i += 1;
-          break;
-        case "--tailscale":
-          tailscale = true;
-          break;
-        case "--tailscale-serve":
-          tailscaleServe = true;
-          break;
-        case "--tailscale-serve-port":
-          tailscaleServePort = Number(takeValue(rest, i, "--tailscale-serve-port"));
-          i += 1;
-          break;
-        case "--verbose":
-          verbose = true;
-          break;
-        default:
-          if (arg.startsWith("-")) return { kind: "error", message: `unknown option ${arg}` };
-          repoRoot = arg;
-      }
-    }
-  } catch (error) {
-    return { kind: "error", message: (error as Error).message };
+const takeValue = (args: Iterator<string>, flag: string): string => {
+  const next = args.next();
+  if (next.done || next.value.startsWith("-")) {
+    throw new Error(`${flag} needs a value`);
   }
 
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  return next.value;
+};
+
+const readFlag = (flags: ParsedFlags, arg: string, args: Iterator<string>): void => {
+  switch (arg) {
+    case "--tracker": {
+      flags.tracker = trackerChoice(takeValue(args, arg));
+
+      return;
+    }
+
+    case "--host":
+      flags.host = takeValue(args, arg);
+
+      return;
+
+    case "--port":
+      flags.port = Number(takeValue(args, arg));
+
+      return;
+
+    case "--tailscale":
+      flags.tailscale = true;
+
+      return;
+
+    case "--tailscale-serve":
+      flags.tailscaleServe = true;
+
+      return;
+
+    case "--tailscale-serve-port":
+      flags.tailscaleServePort = Number(takeValue(args, arg));
+
+      return;
+
+    case "--verbose":
+      flags.verbose = true;
+
+      return;
+
+    default:
+      if (arg.startsWith("-")) {
+        throw new Error(`unknown option ${arg}`);
+      }
+
+      flags.repoRoot = arg;
+  }
+};
+
+const validPort = (port: number) => Number.isInteger(port) && port >= 1 && port <= 65_535;
+
+const commandFromFlags = (
+  flags: ParsedFlags,
+  rest: readonly string[],
+  serve: boolean,
+  daemon: boolean,
+): Command => {
+  const { repoRoot, tracker, host, port, tailscale, tailscaleServe, tailscaleServePort, verbose } =
+    flags;
+
+  if (!validPort(port)) {
     return { kind: "error", message: `--port must be a port number, not "${port}"` };
   }
 
-  if (daemon) {
+  if (tailscaleServePort !== 0 && !validPort(tailscaleServePort)) {
     return {
-      kind: "daemon",
-      host,
-      port,
-      tailscale,
-      tailscaleServe,
-      tailscaleServePort: tailscaleServePort === 0 ? port : tailscaleServePort,
+      kind: "error",
+      message: `--tailscale-serve-port must be a port number, not "${tailscaleServePort}"`,
     };
   }
 
-  if (!serve) {
-    const guiOnly = rest.find((a) =>
-      [
-        "--port",
-        "--host",
-        "--tailscale",
-        "--tailscale-serve",
-        "--tailscale-serve-port",
-        "--verbose",
-      ].includes(a),
-    );
-    if (guiOnly !== undefined) {
-      return {
-        kind: "error",
-        // The GUI's server takes an ephemeral port precisely because nothing
-        // outside the process needs to reach it. Accepting these silently
-        // would imply otherwise.
-        message: `${guiOnly} only applies to \`foglight serve\` — the desktop window binds an ephemeral local port`,
-      };
-    }
-    return { kind: "gui", repoRoot, tracker };
-  }
-
-  return {
-    kind: "serve",
-    repoRoot,
-    tracker,
+  const server = {
     host,
     port,
     tailscale,
     tailscaleServe,
     tailscaleServePort: tailscaleServePort === 0 ? port : tailscaleServePort,
-    verbose,
   };
+
+  if (daemon) {
+    return { kind: "daemon", ...server };
+  }
+
+  if (serve) {
+    return { kind: "serve", repoRoot, tracker, verbose, ...server };
+  }
+
+  const guiOnly = rest.find((arg) =>
+    [
+      "--port",
+      "--host",
+      "--tailscale",
+      "--tailscale-serve",
+      "--tailscale-serve-port",
+      "--verbose",
+    ].includes(arg),
+  );
+
+  if (guiOnly !== undefined) {
+    return {
+      kind: "error",
+      message: `${guiOnly} only applies to \`foglight serve\` — the desktop window binds an ephemeral local port`,
+    };
+  }
+
+  return { kind: "gui", repoRoot, tracker };
+};
+
+export const parseArgv = (argv: readonly string[], cwd: string): Command => {
+  const args = argv.slice(2);
+  if (args.some((arg) => ["-h", "--help"].includes(arg))) {
+    return { kind: "help" };
+  }
+
+  if (args.some((arg) => ["-v", "--version"].includes(arg))) {
+    return { kind: "version" };
+  }
+
+  if (args[0] === "status") {
+    return { kind: "status" };
+  }
+
+  const serve = args[0] === "serve";
+  const daemon = args[0] === "daemon";
+  const rest = serve || daemon ? args.slice(1) : args;
+
+  const flags: ParsedFlags = {
+    repoRoot: cwd,
+    tracker: null,
+    host: DEFAULT_HOST,
+    port: DEFAULT_PORT,
+    tailscale: false,
+    tailscaleServe: false,
+    tailscaleServePort: 0,
+    verbose: false,
+  };
+
+  try {
+    const remaining = rest.values();
+    for (const arg of remaining) {
+      readFlag(flags, arg, remaining);
+    }
+
+    return commandFromFlags(flags, rest, serve, daemon);
+  } catch (error) {
+    return { kind: "error", message: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+const trackerChoice = (value: string): TrackerChoice => {
+  if (value === "local" || value === "github") {
+    return value;
+  }
+
+  throw new Error(`--tracker must be local or github, not "${value}"`);
 };

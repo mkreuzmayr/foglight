@@ -18,6 +18,7 @@ try {
     `foglight build: no client bundle at ${source}.\n` +
       "  Run the client's build first (`turbo run build` does this in order).",
   );
+
   process.exit(1);
 }
 

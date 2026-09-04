@@ -1,13 +1,14 @@
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Fiber } from "effect";
-import { createServer, type Socket as NetSocket } from "node:net";
+import { createServer } from "node:net";
+import type { Socket as NetSocket } from "node:net";
 import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runAttacher } from "../src/attacher.js";
-import { writeClaim } from "../src/claim.js";
-import type { RuntimeLayout } from "../src/layout.js";
+import { runAttacher } from "#foglight/attacher.js";
+import { writeClaim } from "#foglight/claim.js";
+import type { RuntimeLayout } from "#foglight/layout.js";
 import {
   decodeLine,
   encode,
@@ -15,8 +16,8 @@ import {
   Hello,
   HelloReplyErr,
   HelloReplyOk,
-  type Message,
-} from "../src/protocol.js";
+} from "#foglight/protocol.js";
+import type { Message } from "#foglight/protocol.js";
 
 const run = <A>(effect: Effect.Effect<A, unknown, NodeContext.NodeContext>) =>
   Effect.runPromise(effect.pipe(Effect.provide(NodeContext.layer)) as Effect.Effect<A>);
@@ -39,21 +40,29 @@ const listenFake = (
     const server = createServer((sock) => {
       sockets.add(sock);
       sock.on("close", () => sockets.delete(sock));
-      let buf = "";
+      type ReaderState = { buf: string };
+      const readerState: ReaderState = { buf: "" };
       sock.on("data", (chunk) => {
-        buf += chunk.toString("utf8");
-        let nl = buf.indexOf("\n");
-        while (nl >= 0) {
-          const line = buf.slice(0, nl + 1);
-          buf = buf.slice(nl + 1);
+        readerState.buf += chunk.toString("utf8");
+        for (;;) {
+          const newline = readerState.buf.indexOf("\n");
+          if (newline < 0) {
+            break;
+          }
+
+          const line = readerState.buf.slice(0, newline + 1);
+          readerState.buf = readerState.buf.slice(newline + 1);
           const message = decodeLine(line);
           const reply = (m: Message) => sock.write(encode(m));
-          if (message.type === "hello") onHello(message, reply, sock);
-          else onMessage?.(message, reply, sock);
-          nl = buf.indexOf("\n");
+          if (message.type === "hello") {
+            onHello(message, reply, sock);
+          } else {
+            onMessage?.(message, reply, sock);
+          }
         }
       });
     });
+
     (server as typeof server & { _sockets: Set<NetSocket> })._sockets = sockets;
     server.on("error", reject);
     server.listen({ path: socketPath }, () => resolve(server));
@@ -62,39 +71,56 @@ const listenFake = (
 const closeServer = (server: ReturnType<typeof createServer>) =>
   new Promise<void>((resolve) => {
     const sockets = (server as typeof server & { _sockets?: Set<NetSocket> })._sockets;
-    if (sockets !== undefined) for (const sock of sockets) sock.destroy();
+    if (sockets !== undefined) {
+      for (const sock of sockets) {
+        sock.destroy();
+      }
+    }
+
     server.close(() => resolve());
   });
 
 describe("runAttacher", () => {
-  let dir = "";
-  let server: ReturnType<typeof createServer> | undefined;
-  let fiber: Fiber.RuntimeFiber<number, unknown> | undefined;
+  type Fixture = {
+    dir: string;
+    server: ReturnType<typeof createServer> | undefined;
+    fiber: Fiber.RuntimeFiber<number, unknown> | undefined;
+  };
+
+  const fixture: Fixture = { dir: "", server: undefined, fiber: undefined };
 
   afterEach(async () => {
-    if (fiber !== undefined) {
-      await run(Fiber.interrupt(fiber));
-      fiber = undefined;
+    if (fixture.fiber !== undefined) {
+      await run(Fiber.interrupt(fixture.fiber));
+      fixture.fiber = undefined;
     }
-    if (server !== undefined) await closeServer(server);
-    server = undefined;
-    if (dir !== "") await rm(dir, { recursive: true, force: true });
+
+    if (fixture.server !== undefined) {
+      await closeServer(fixture.server);
+    }
+
+    fixture.server = undefined;
+    if (fixture.dir !== "") {
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
   });
 
   const layoutIn = async (): Promise<RuntimeLayout> => {
-    dir = await mkdtemp(join(tmpdir(), "foglight-ipc-"));
+    fixture.dir = await mkdtemp(join(tmpdir(), "foglight-ipc-"));
+
     return {
-      dir,
-      claimPath: join(dir, "claim"),
-      socketPath: join(dir, "sock"),
-      logPath: join(dir, "daemon.log"),
+      dir: fixture.dir,
+      claimPath: join(fixture.dir, "claim"),
+      socketPath: join(fixture.dir, "sock"),
+      logPath: join(fixture.dir, "daemon.log"),
     };
   };
 
   it("prints the session URL from a live daemon and does not spawn", async () => {
     const layout = await layoutIn();
-    let spawned = 0;
-    server = await listenFake(layout.socketPath, (_hello, reply) => {
+    type Calls = { spawned: number };
+    const calls: Calls = { spawned: 0 };
+    fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
       reply(
         HelloReplyOk.make({
           type: "hello-reply",
@@ -109,7 +135,7 @@ describe("runAttacher", () => {
     });
 
     const lines: string[] = [];
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({
@@ -122,7 +148,7 @@ describe("runAttacher", () => {
         mode: "serve",
         spawnDaemon: () =>
           Effect.sync(() => {
-            spawned += 1;
+            calls.spawned += 1;
           }),
         write: (line) => lines.push(line),
         writeError: (line) => lines.push(line),
@@ -130,13 +156,13 @@ describe("runAttacher", () => {
     );
 
     await expect.poll(() => lines.some((l) => l.includes("http://127.0.0.1:4747/"))).toBe(true);
-    expect(spawned).toBe(0);
-    await run(Fiber.interrupt(fiber));
+    expect(calls.spawned).toBe(0);
+    await run(Fiber.interrupt(fixture.fiber));
   });
 
   it("prints status and disconnects without staying resident", async () => {
     const layout = await layoutIn();
-    server = await listenFake(layout.socketPath, (_hello, reply, sock) => {
+    fixture.server = await listenFake(layout.socketPath, (_hello, reply, sock) => {
       reply(
         HelloReplyOk.make({
           type: "hello-reply",
@@ -148,6 +174,7 @@ describe("runAttacher", () => {
           projects: [{ name: "foglight", path: "/repo" }],
         }),
       );
+
       sock.end();
     });
 
@@ -171,7 +198,7 @@ describe("runAttacher", () => {
 
   it("exits when the path is already registered", async () => {
     const layout = await layoutIn();
-    server = await listenFake(layout.socketPath, (_hello, reply) => {
+    fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
       reply(
         HelloReplyErr.make({
           type: "hello-reply",
@@ -206,7 +233,8 @@ describe("runAttacher", () => {
 
   it("prints no session when status finds no daemon", async () => {
     const layout = await layoutIn();
-    let spawned = 0;
+    type Calls = { spawned: number };
+    const calls: Calls = { spawned: 0 };
     const lines: string[] = [];
     const code = await run(
       runAttacher({
@@ -215,22 +243,24 @@ describe("runAttacher", () => {
         mode: "status",
         spawnDaemon: () =>
           Effect.sync(() => {
-            spawned += 1;
+            calls.spawned += 1;
           }),
         write: (line) => lines.push(line),
         writeError: (line) => lines.push(line),
       }),
     );
+
     expect(code).toBe(0);
-    expect(spawned).toBe(0);
+    expect(calls.spawned).toBe(0);
     expect(lines.join("\n").toLowerCase()).toContain("no session");
   });
 
   it("spawns a daemon when none is listening", async () => {
     const layout = await layoutIn();
-    let spawned = 0;
+    type Calls = { spawned: number };
+    const calls: Calls = { spawned: 0 };
     const lines: string[] = [];
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({
@@ -243,8 +273,8 @@ describe("runAttacher", () => {
         mode: "serve",
         spawnDaemon: () =>
           Effect.promise(async () => {
-            spawned += 1;
-            server = await listenFake(layout.socketPath, (_hello, reply) => {
+            calls.spawned += 1;
+            fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
               reply(
                 HelloReplyOk.make({
                   type: "hello-reply",
@@ -264,26 +294,30 @@ describe("runAttacher", () => {
     );
 
     await expect.poll(() => lines.some((l) => l.includes("http://127.0.0.1:4747/"))).toBe(true);
-    expect(spawned).toBe(1);
-    await run(Fiber.interrupt(fiber));
+    expect(calls.spawned).toBe(1);
+    await run(Fiber.interrupt(fixture.fiber));
   });
 
   it("respawns after the daemon socket closes", async () => {
     const layout = await layoutIn();
-    let spawned = 0;
+    type Calls = { spawned: number };
+    const calls: Calls = { spawned: 0 };
     const lines: string[] = [];
 
     const boot = () =>
       Effect.promise(async () => {
-        spawned += 1;
-        if (server !== undefined) await closeServer(server);
+        calls.spawned += 1;
+        if (fixture.server !== undefined) {
+          await closeServer(fixture.server);
+        }
+
         await unlink(layout.socketPath).catch(() => undefined);
-        server = await listenFake(layout.socketPath, (_hello, reply) => {
+        fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
           reply(
             HelloReplyOk.make({
               type: "hello-reply",
               ok: true,
-              pid: spawned,
+              pid: calls.spawned,
               url: `http://127.0.0.1:4747/`,
               version: "0.1.0",
               flags,
@@ -293,7 +327,7 @@ describe("runAttacher", () => {
         });
       });
 
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({
@@ -310,7 +344,7 @@ describe("runAttacher", () => {
       }).pipe(Effect.provide(NodeContext.layer)),
     );
 
-    await expect.poll(() => spawned).toBe(1);
+    await expect.poll(() => calls.spawned).toBe(1);
     await expect
       .poll(() => lines.filter((l) => l.includes("http://127.0.0.1:4747/")).length)
       .toBe(1);
@@ -323,19 +357,21 @@ describe("runAttacher", () => {
         version: "0.1.0",
       }),
     );
-    await closeServer(server!);
-    server = undefined;
 
-    await expect.poll(() => spawned).toBe(2);
+    await closeServer(fixture.server!);
+    fixture.server = undefined;
+
+    await expect.poll(() => calls.spawned).toBe(2);
     await expect
       .poll(() => lines.filter((l) => l.includes("http://127.0.0.1:4747/")).length)
       .toBe(2);
-    await run(Fiber.interrupt(fiber));
+
+    await run(Fiber.interrupt(fixture.fiber));
   });
 
   it("warns when serve flags disagree with the daemon's, then attaches", async () => {
     const layout = await layoutIn();
-    server = await listenFake(layout.socketPath, (_hello, reply) => {
+    fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
       reply(
         HelloReplyOk.make({
           type: "hello-reply",
@@ -350,7 +386,7 @@ describe("runAttacher", () => {
     });
 
     const lines: string[] = [];
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({
@@ -374,11 +410,12 @@ describe("runAttacher", () => {
 
   it("asks a version-skewed daemon to shut down, then respawns", async () => {
     const layout = await layoutIn();
-    let spawned = 0;
-    let shutdowns = 0;
+    type Calls = { spawned: number; shutdowns: number };
+    const calls: Calls = { spawned: 0, shutdowns: 0 };
+
     const lines: string[] = [];
 
-    server = await listenFake(
+    fixture.server = await listenFake(
       layout.socketPath,
       (_hello, reply) => {
         reply(
@@ -392,15 +429,18 @@ describe("runAttacher", () => {
       },
       (message, _reply, sock) => {
         if (message.type === "shutdown-request") {
-          shutdowns += 1;
+          calls.shutdowns += 1;
           sock.destroy();
-          if (server !== undefined)
-            void closeServer(server).then(() => unlink(layout.socketPath).catch(() => undefined));
+          if (fixture.server !== undefined) {
+            void closeServer(fixture.server).then(() =>
+              unlink(layout.socketPath).catch(() => undefined),
+            );
+          }
         }
       },
     );
 
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({
@@ -413,10 +453,13 @@ describe("runAttacher", () => {
         mode: "serve",
         spawnDaemon: () =>
           Effect.promise(async () => {
-            spawned += 1;
-            if (server !== undefined) await closeServer(server);
+            calls.spawned += 1;
+            if (fixture.server !== undefined) {
+              await closeServer(fixture.server);
+            }
+
             await unlink(layout.socketPath).catch(() => undefined);
-            server = await listenFake(layout.socketPath, (_hello, reply) => {
+            fixture.server = await listenFake(layout.socketPath, (_hello, reply) => {
               reply(
                 HelloReplyOk.make({
                   type: "hello-reply",
@@ -435,14 +478,14 @@ describe("runAttacher", () => {
       }).pipe(Effect.provide(NodeContext.layer)),
     );
 
-    await expect.poll(() => shutdowns).toBe(1);
-    await expect.poll(() => spawned).toBe(1);
+    await expect.poll(() => calls.shutdowns).toBe(1);
+    await expect.poll(() => calls.spawned).toBe(1);
     await expect.poll(() => lines.some((l) => l.includes("http://127.0.0.1:4747/"))).toBe(true);
   });
 
   it("prints lifecycle events from the daemon", async () => {
     const layout = await layoutIn();
-    server = await listenFake(layout.socketPath, (_hello, reply, sock) => {
+    fixture.server = await listenFake(layout.socketPath, (_hello, reply, sock) => {
       reply(
         HelloReplyOk.make({
           type: "hello-reply",
@@ -454,6 +497,7 @@ describe("runAttacher", () => {
           projects: [],
         }),
       );
+
       sock.write(
         encode(
           Event.make({ type: "event", kind: "project-joined", path: "/other", name: "other" }),
@@ -462,7 +506,7 @@ describe("runAttacher", () => {
     });
 
     const lines: string[] = [];
-    fiber = Effect.runFork(
+    fixture.fiber = Effect.runFork(
       runAttacher({
         layout,
         hello: Hello.make({

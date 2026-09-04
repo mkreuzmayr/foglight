@@ -25,8 +25,14 @@ export const spawnDetachedDaemon = (input: {
     "--tailscale-serve-port",
     String(input.flags.tailscaleServePort),
   ];
-  if (input.flags.tailscale) args.push("--tailscale");
-  if (input.flags.tailscaleServe) args.push("--tailscale-serve");
+
+  if (input.flags.tailscale) {
+    args.push("--tailscale");
+  }
+
+  if (input.flags.tailscaleServe) {
+    args.push("--tailscale-serve");
+  }
 
   const child = spawn(process.execPath, [...process.execArgv, ...args], {
     detached: true,
@@ -34,6 +40,7 @@ export const spawnDetachedDaemon = (input: {
     stdio: ["ignore", logFd, logFd],
     env: { ...process.env, FOGLIGHT_CLIENT_DIR: input.clientDir },
   });
+
   child.unref();
   closeSync(logFd);
 };
