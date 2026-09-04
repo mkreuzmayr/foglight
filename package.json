@@ -9,11 +9,15 @@
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
     "format": "oxfmt .",
-    "format:check": "oxfmt --check ."
+    "format:check": "oxfmt --check .",
+    "lint:fix": "oxlint . --fix"
   },
   "devDependencies": {
+    "@mkrz/oxlint-config": "0.1.0",
+    "@oxlint/plugins": "~1.81.0",
     "oxfmt": "^0.62.0",
-    "oxlint": "^1.77.0",
+    "oxlint": "~1.81.0",
+    "oxlint-tsgolint": "~7.0.2001",
     "turbo": "^2.10.9",
     "typescript": "^5.9.3"
   },
