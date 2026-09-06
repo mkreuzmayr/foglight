@@ -14,4 +14,4 @@ allowBuilds:
   msgpackr-extract: true
 
 minimumReleaseAgeExclude:
-  - "@mkrz/oxlint-config@0.1.0"
+  - "@mkrz/oxlint-config@0.1.1"

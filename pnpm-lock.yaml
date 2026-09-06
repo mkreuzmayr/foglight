@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@mkrz/oxlint-config':
-        specifier: 0.1.0
-        version: 0.1.0(@oxlint/plugins@1.81.0)(oxlint-tsgolint@7.0.2001)(oxlint@1.81.0(oxlint-tsgolint@7.0.2001))
+        specifier: 0.1.1
+        version: 0.1.1(@oxlint/plugins@1.81.0)(oxlint-tsgolint@7.0.2001)(oxlint@1.81.0(oxlint-tsgolint@7.0.2001))
       '@oxlint/plugins':
         specifier: ~1.81.0
         version: 1.81.0
@@ -573,8 +573,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@mkrz/oxlint-config@0.1.0':
-    resolution: {integrity: sha512-psKsV+VFx+nZ6arpkCDAMc9cXskaWPFXCwLUZwS4wgMgb3eO99mlabOq3KN4Uro7SfkZw7aO5ycPe/WrVyK+ew==}
+  '@mkrz/oxlint-config@0.1.1':
+    resolution: {integrity: sha512-mRDBUTypo2Twd4cZQYe89hILvzqNVAuZmfSdELC5oXAlMe+36Zv/4HmCM4i9BUXeqAhMV05OBwFAZCxmk2o8eg==}
     engines: {node: '>=22.18.0'}
     peerDependencies:
       '@oxlint/plugins': ~1.81.0
@@ -2770,7 +2770,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@mkrz/oxlint-config@0.1.0(@oxlint/plugins@1.81.0)(oxlint-tsgolint@7.0.2001)(oxlint@1.81.0(oxlint-tsgolint@7.0.2001))':
+  '@mkrz/oxlint-config@0.1.1(@oxlint/plugins@1.81.0)(oxlint-tsgolint@7.0.2001)(oxlint@1.81.0(oxlint-tsgolint@7.0.2001))':
     dependencies:
       '@oxlint/plugins': 1.81.0
       ignore: 7.0.8

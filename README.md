@@ -56,9 +56,9 @@ Internal Node package imports use `#core/`, `#server/`, and `#foglight/` aliases
 the client uses `@/`.
 
 Avoid effects for derived state. Necessary browser and React Flow integrations
-have one-rule disable comments explaining their lifecycle. The config also
-contains temporary workarounds for [type-import side effects](https://github.com/mkrz/oxlint-config/pull/2)
-and the [Effect error-factory autofix](https://github.com/mkrz/oxlint-config/pull/3).
+have one-rule disable comments explaining their lifecycle. The shared config
+handles type-only imports and curried Effect error factories without local
+overrides. The local config allows Effect's public `_tag` discriminant.
 
 Two things worth knowing before you change the UI:
 
