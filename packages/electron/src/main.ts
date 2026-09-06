@@ -69,6 +69,7 @@ export const runGui = async (options: GuiOptions): Promise<void> => {
   // a viewer that can be navigated away from its own map is a broken viewer.
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
+
     return { action: "deny" };
   });
 
@@ -85,15 +86,27 @@ export const runGui = async (options: GuiOptions): Promise<void> => {
  */
 const main = async () => {
   await runGui({
-    repoRoot: process.env["FOGLIGHT_REPO"] ?? process.cwd(),
-    tracker: (process.env["FOGLIGHT_TRACKER"] as TrackerOverride) || null,
-    clientDir: process.env["FOGLIGHT_CLIENT_DIR"] ?? join(import.meta.dirname, "../client"),
+    repoRoot: process.env.FOGLIGHT_REPO ?? process.cwd(),
+    tracker: parseTracker(process.env.FOGLIGHT_TRACKER),
+    clientDir: process.env.FOGLIGHT_CLIENT_DIR ?? join(import.meta.dirname, "../client"),
   });
 };
 
-if (process.env["FOGLIGHT_ELECTRON_ENTRY"] === "1") {
-  void main().catch((error: unknown) => {
+if (process.env.FOGLIGHT_ELECTRON_ENTRY === "1") {
+  void main().catch((error) => {
     console.error(error);
     app.exit(1);
   });
+}
+
+function parseTracker(value: string | undefined): TrackerOverride {
+  if (value === undefined || value === "") {
+    return null;
+  }
+
+  if (value === "local" || value === "github") {
+    return value;
+  }
+
+  throw new Error(`Unsupported tracker: ${value}`);
 }

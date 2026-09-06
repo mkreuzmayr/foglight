@@ -12,7 +12,8 @@ import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "@eff
 import { Sse } from "@effect/experimental";
 import { makeId } from "@foglight/core";
 import { Duration, Effect, Schedule, Stream } from "effect";
-import { MapStore, type ServerEvent } from "./store.js";
+import { MapStore } from "./store.js";
+import type { ServerEvent } from "./store.js";
 import { ProjectSession } from "./session.js";
 
 /** Comment frames keep proxies and `tailscale serve` from reaping an idle stream. */
@@ -20,14 +21,19 @@ const PING_INTERVAL = Duration.seconds(20);
 /** Told to the browser explicitly rather than left to `EventSource`'s default. */
 const RETRY_MS = 2000;
 
-const payload = (event: ServerEvent): unknown => {
+const payload = (event: ServerEvent) => {
   switch (event._tag) {
     case "maps":
       return { maps: event.maps };
+
     case "projects":
       return { projects: event.projects };
+
     case "map":
       return event.snapshot;
+
+    default:
+      return assertUnreachable(event);
   }
 };
 
@@ -79,16 +85,18 @@ const events = Effect.gen(function* () {
   });
 });
 
-const CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".woff2": "font/woff2",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-};
+const CONTENT_TYPES = new Map(
+  Object.entries({
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+  }),
+);
 
 /**
  * The client bundle. Hashed assets are immutable and cached forever; the entry
@@ -105,10 +113,12 @@ const staticFiles = (clientDir: string) =>
     const relative = path === "/" ? "index.html" : path.replace(/^\/+/, "");
 
     // Nothing may escape the bundle directory.
-    if (relative.includes("..")) return HttpServerResponse.empty({ status: 404 });
+    if (relative.includes("..")) {
+      return HttpServerResponse.empty({ status: 404 });
+    }
 
     const extension = relative.slice(relative.lastIndexOf("."));
-    const contentType = CONTENT_TYPES[extension] ?? "application/octet-stream";
+    const contentType = CONTENT_TYPES.get(extension) ?? "application/octet-stream";
     const immutable = /-[A-Za-z0-9_-]{8,}\./.test(relative);
 
     return yield* HttpServerResponse.file(`${clientDir}/${relative}`, {
@@ -144,3 +154,7 @@ export const extraRoutes = (clientDir: string) =>
  */
 export const isApiRequest = (url: string): boolean =>
   url.startsWith("/api/") && !url.startsWith("/api/events");
+
+const assertUnreachable = (event: never): never => {
+  throw new Error(`Unexpected server event: ${String(event)}`);
+};

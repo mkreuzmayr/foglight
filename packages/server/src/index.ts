@@ -9,17 +9,23 @@
  * second code path — which is why headless is the default shape rather than a
  * side door.
  */
-import { HttpApiBuilder, HttpServer, HttpServerRequest, type HttpApp } from "@effect/platform";
+import {
+  HttpApiBuilder,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+  FetchHttpClient,
+} from "@effect/platform";
+import type { HttpApp } from "@effect/platform";
 import { NodeContext, NodeHttpServer } from "@effect/platform-node";
-import { FetchHttpClient } from "@effect/platform";
 import {
   resolveTracker,
   idFor,
   Project,
   ProjectPathInvalid,
   NoTrackerDetected,
-  type TrackerOverride,
 } from "@foglight/core";
+import type { TrackerOverride } from "@foglight/core";
 import { Duration, Effect, Layer } from "effect";
 import { createServer } from "node:http";
 import { realpath, stat } from "node:fs/promises";
@@ -54,9 +60,14 @@ export type ServerOptions = {
 const dispatch = (clientDir: string) => (apiApp: HttpApp.Default) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+
     return isApiRequest(new URL(request.url, "http://localhost").pathname)
       ? yield* apiApp
-      : yield* extraRoutes(clientDir);
+      : yield* extraRoutes(clientDir).pipe(
+          Effect.catchTag("RouteNotFound", () =>
+            Effect.succeed(HttpServerResponse.empty({ status: 404 })),
+          ),
+        );
   });
 
 const openProject = (input: { readonly path: string; readonly tracker?: TrackerOverride }) =>
@@ -65,13 +76,16 @@ const openProject = (input: { readonly path: string; readonly tracker?: TrackerO
       try: () => realpath(input.path),
       catch: (cause) => new ProjectPathInvalid({ path: input.path, reason: String(cause) }),
     });
+
     const info = yield* Effect.tryPromise({
       try: () => stat(canonical),
       catch: (cause) => new ProjectPathInvalid({ path: canonical, reason: String(cause) }),
     });
+
     if (!info.isDirectory()) {
       return yield* new ProjectPathInvalid({ path: canonical, reason: "not a directory" });
     }
+
     const resolved = yield* resolveTracker(canonical, input.tracker ?? null).pipe(Effect.either);
     if (resolved._tag === "Left") {
       if (resolved.left instanceof NoTrackerDetected) {
@@ -84,6 +98,7 @@ const openProject = (input: { readonly path: string; readonly tracker?: TrackerO
           }),
         };
       }
+
       return {
         project: new Project({
           id: idFor(canonical),
@@ -96,6 +111,7 @@ const openProject = (input: { readonly path: string; readonly tracker?: TrackerO
         }),
       };
     }
+
     const { adapter, cadence } = resolved.right;
     const project = new Project({
       id: idFor(canonical),
@@ -104,6 +120,7 @@ const openProject = (input: { readonly path: string; readonly tracker?: TrackerO
       state: "ready",
       trackerKind: adapter.kind,
     });
+
     return { project, adapter, cadence };
   });
 
@@ -119,9 +136,15 @@ const detectUntilReady = (project: Project, override: TrackerOverride) =>
 
     const tick = Effect.gen(function* () {
       const live = (yield* session.list).find((p) => p.path === project.path);
-      if (live === undefined || live.state === "ready") return true;
+      if (live === undefined || live.state === "ready") {
+        return true;
+      }
+
       const resolved = yield* resolveTracker(project.path, override).pipe(Effect.either);
-      if (resolved._tag === "Left") return false;
+      if (resolved._tag === "Left") {
+        return false;
+      }
+
       const ready = new Project({
         id: project.id,
         name: project.name,
@@ -129,13 +152,16 @@ const detectUntilReady = (project: Project, override: TrackerOverride) =>
         state: "ready",
         trackerKind: resolved.right.adapter.kind,
       });
+
       yield* session.replace(ready);
       yield* store.add({
         adapter: resolved.right.adapter,
         project: { id: ready.id, name: ready.name },
         cadence: resolved.right.cadence,
       });
+
       yield* store.announceProjects(yield* session.list);
+
       return true;
     }).pipe(Effect.orElseSucceed(() => false));
 
@@ -153,7 +179,10 @@ export const attachProject = (input: {
     const store = yield* Store.MapStore;
     const opened = yield* openProject(input);
     const project = yield* session.attach(opened.project);
-    if (project !== opened.project) return project;
+    if (project !== opened.project) {
+      return project;
+    }
+
     if (opened.adapter !== undefined) {
       yield* store.add({
         adapter: opened.adapter,
@@ -163,7 +192,9 @@ export const attachProject = (input: {
     } else {
       yield* detectUntilReady(opened.project, input.tracker ?? null).pipe(Effect.forkDaemon);
     }
+
     yield* store.announceProjects(yield* session.list);
+
     return project;
   });
 
@@ -174,6 +205,7 @@ export const detachProject = (input: { readonly path: string }) =>
     const canonical = yield* Effect.tryPromise(() => realpath(input.path)).pipe(
       Effect.orElseSucceed(() => input.path),
     );
+
     const removed = yield* session.detach(canonical);
     if (removed !== undefined) {
       yield* store.remove(removed.id);
@@ -188,9 +220,11 @@ export const AppLayer = (options: ServerOptions) => {
       if (initial === undefined) {
         return Layer.merge(Store.empty, Session.layer([]));
       }
+
       const opened = yield* openProject(initial);
       if (opened.adapter === undefined) {
         const base = Layer.merge(Store.empty, Session.layer([opened.project]));
+
         return Layer.merge(
           base,
           Layer.scopedDiscard(detectUntilReady(opened.project, initial.tracker ?? null)).pipe(
@@ -198,6 +232,7 @@ export const AppLayer = (options: ServerOptions) => {
           ),
         );
       }
+
       return Layer.merge(
         Store.layer(opened.adapter, opened.cadence, {
           id: opened.project.id,
@@ -213,7 +248,7 @@ export const AppLayer = (options: ServerOptions) => {
     port: options.port,
   });
 
-  const serving = HttpApiBuilder.serve(dispatch(options.clientDir) as never).pipe(
+  const serving = HttpApiBuilder.serve(dispatch(options.clientDir)).pipe(
     Layer.provide(ApiLive),
     Layer.provideMerge(services),
     Layer.provide(httpServer),

@@ -11,10 +11,16 @@
  *   - `loadMap`   — the whole map at once, no lazy detail-on-click
  *   - `changes`   — bare invalidation ticks, no payload
  */
-import type { Stream } from "effect";
-import type { Effect } from "effect";
-import type { MapNotFound, MapUnparseable, TrackerError } from "../domain/errors.js";
-import type { Body, MapDescriptor, MapSnapshot, ResourceId, TrackerKind } from "../domain/model.js";
+import type { Stream, Effect } from "effect";
+
+import type { MapNotFound, MapUnparseable, TrackerError } from "#core/domain/errors.js";
+import type {
+  Body,
+  MapDescriptor,
+  MapSnapshot,
+  ResourceId,
+  TrackerKind,
+} from "#core/domain/model.js";
 
 /**
  * "Something moved." Deliberately payload-free: foglight responds by taking a
@@ -34,7 +40,7 @@ export type TrackerAdapter = {
   /** what the rail header shows: `.wayfinder/` or `owner/repo` */
   readonly label: string;
 
-  readonly listMaps: () => Effect.Effect<ReadonlyArray<MapDescriptor>, TrackerError>;
+  readonly listMaps: () => Effect.Effect<readonly MapDescriptor[], TrackerError>;
 
   readonly loadMap: (
     id: ResourceId,

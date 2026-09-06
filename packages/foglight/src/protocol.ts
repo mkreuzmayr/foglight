@@ -11,6 +11,7 @@ export const ServeFlags = Schema.Struct({
   tailscaleServe: Schema.Boolean,
   tailscaleServePort: Schema.Number,
 });
+
 export type ServeFlags = typeof ServeFlags.Type;
 
 export class Hello extends Schema.Class<Hello>("Hello")({
@@ -26,6 +27,7 @@ export const AttachedProject = Schema.Struct({
   name: Schema.String,
   path: Schema.String,
 });
+
 export type AttachedProject = typeof AttachedProject.Type;
 
 export class HelloReplyOk extends Schema.Class<HelloReplyOk>("HelloReplyOk")({
@@ -69,9 +71,10 @@ export const Message = Schema.Union(
   LogLine,
   ShutdownRequest,
 );
+
 export type Message = typeof Message.Type;
 
 export const encode = (message: Message): string => `${JSON.stringify(message)}\n`;
 
 export const decodeLine = (line: string): Message =>
-  Schema.decodeUnknownSync(Message)(JSON.parse(line) as unknown);
+  Schema.decodeUnknownSync(Message)(JSON.parse(line));

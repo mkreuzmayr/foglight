@@ -53,7 +53,7 @@ export const queryClient = new QueryClient({
 export const keys = {
   maps: ["maps"] as const,
   projects: ["projects"] as const,
-  snapshot: (id: ResourceId) => ["map", id] as const,
+  snapshot: (id: ResourceId | null) => ["map", id] as const,
   /**
    * Bodies key on `(id, bodyHash)` — **the hash is the staleness rule, not a
    * TTL** (SPEC.md §6). A body whose hash hasn't moved is still correct, so it
@@ -76,11 +76,14 @@ export const projectsQuery = () =>
     queryFn: () => Effect.flatMap(Api, (api) => api.projects.list()),
   });
 
-export const snapshotQuery = (id: ResourceId) =>
+export const snapshotQuery = (id: ResourceId | null) =>
   queryOptions({
     queryKey: keys.snapshot(id),
+    enabled: id !== null,
     queryFn: () =>
-      Effect.flatMap(Api, (api) => api.maps.snapshot({ path: { id: encodeURIComponent(id) } })),
+      id === null
+        ? Effect.dieMessage("No map selected")
+        : Effect.flatMap(Api, (api) => api.maps.snapshot({ path: { id: encodeURIComponent(id) } })),
   });
 
 export const mapBodyQuery = (id: ResourceId, hash: string) =>

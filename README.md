@@ -31,7 +31,7 @@ A pnpm monorepo that publishes exactly one package.
 |---|---|
 | `packages/core` | The domain: wayfinder types, the snapshot schema, the `frontier`/`unblocked` derivation, the shared body parser, both tracker adapters, and the `HttpApi` contract both ends share. |
 | `packages/server` | The Effect HTTP server: `/api/*`, the SSE feed, file watching, GitHub polling. |
-| `packages/client` | The Vite/React cockpit. Depends on core for types only. |
+| `packages/client` | The Vite/React cockpit. Uses core schemas and types. |
 | `packages/electron` | The Electron main process — a *client* of the same server headless runs. |
 | `packages/foglight` | The published package: the `bin`, argv dispatch, and the assembled bundle. |
 
@@ -46,7 +46,19 @@ pnpm build          # turbo: client bundle, then the published bundle
 pnpm test           # core + server (integration, against this repo's own map)
 pnpm typecheck
 pnpm lint
+pnpm lint:fix       # apply safe lint fixes, then review the diff
+pnpm format:check
 ```
+
+Linting uses `@mkrz/oxlint-config` with React and type-aware checks enabled.
+Keep Oxlint and its peers on the versions required by the shared config.
+Internal Node package imports use `#core/`, `#server/`, and `#foglight/` aliases;
+the client uses `@/`.
+
+Avoid effects for derived state. Necessary browser and React Flow integrations
+have one-rule disable comments explaining their lifecycle. The shared config
+handles type-only imports and curried Effect error factories without local
+overrides. The local config allows Effect's public `_tag` discriminant.
 
 Two things worth knowing before you change the UI:
 

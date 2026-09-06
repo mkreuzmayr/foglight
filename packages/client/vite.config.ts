@@ -10,7 +10,7 @@ import { defineConfig } from "vite";
  * In dev the API and the SSE feed are proxied to a `foglight serve` running
  * beside this, so the dev server behaves exactly like the production one.
  */
-const API_TARGET = process.env["FOGLIGHT_SERVER"] ?? "http://127.0.0.1:4747";
+const API_TARGET = process.env.FOGLIGHT_SERVER ?? "http://127.0.0.1:4747";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

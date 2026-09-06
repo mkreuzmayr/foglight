@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HOST, DEFAULT_PORT, parseArgv } from "../src/argv.js";
+import { DEFAULT_HOST, DEFAULT_PORT, parseArgv } from "#foglight/argv.js";
 
 const parse = (...args: string[]) => parseArgv(["node", "foglight", ...args], "/cwd");
 
@@ -24,6 +24,7 @@ describe("parseArgv", () => {
       tailscaleServePort: 9999,
       verbose: false,
     });
+
     expect(parse("serve")).toEqual({
       kind: "serve",
       repoRoot: "/cwd",

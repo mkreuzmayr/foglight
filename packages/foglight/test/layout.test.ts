@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runtimeLayout } from "../src/layout.js";
+import { runtimeLayout } from "#foglight/layout.js";
 
 describe("runtimeLayout", () => {
   it("puts Linux state under XDG_RUNTIME_DIR", () => {
@@ -86,6 +86,7 @@ describe("runtimeLayout", () => {
       socketPath: "/tmp/iso/sock",
       logPath: "/tmp/iso/daemon.log",
     });
+
     expect(
       runtimeLayout({
         platform: "win32",

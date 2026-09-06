@@ -5,7 +5,12 @@ import { App } from "./App.js";
 import { queryClient } from "./lib/api.js";
 import "./index.css";
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (root === null) {
+  throw new Error("Missing root element");
+}
+
+createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <App />

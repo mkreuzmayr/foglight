@@ -8,7 +8,14 @@
  * small and moves constantly, so it is left alone.
  */
 import { HttpApiBuilder } from "@effect/platform";
-import { makeId, MapNotFound, TrackerUnreachable, type ResourceId } from "@foglight/core";
+import {
+  makeId,
+  MapNotFound,
+  TrackerUnreachable,
+  TrackerUnauthenticated,
+  MapUnparseable,
+} from "@foglight/core";
+import type { TrackerError, ResourceId } from "@foglight/core";
 import { Effect, Layer } from "effect";
 import { FoglightApi } from "@foglight/core/api";
 import { MapStore } from "./store.js";
@@ -22,10 +29,16 @@ const decodeId = (raw: string): ResourceId => makeId(decodeURIComponent(raw));
  * in an endpoint's set is reported as the honest thing it is — the tracker
  * could not answer — rather than crashing the request with a defect.
  */
-const asTrackerError = (kind: string) => (cause: unknown) =>
-  cause instanceof MapNotFound || (typeof cause === "object" && cause !== null && "_tag" in cause)
-    ? (cause as never)
-    : (new TrackerUnreachable({ tracker: kind, reason: String(cause) }) as never);
+const asTrackerError = (kind: string) => (cause: TrackerError) =>
+  cause instanceof TrackerUnauthenticated || cause instanceof TrackerUnreachable
+    ? cause
+    : new TrackerUnreachable({ tracker: kind, reason: String(cause) });
+
+const asBodyError = (kind: string) => (cause: TrackerError) =>
+  cause instanceof MapNotFound ? cause : asTrackerError(kind)(cause);
+
+const asSnapshotError = (kind: string) => (cause: TrackerError) =>
+  cause instanceof MapUnparseable ? cause : asBodyError(kind)(cause);
 
 export const MapsHandlers = HttpApiBuilder.group(FoglightApi, "maps", (handlers) =>
   Effect.gen(function* () {
@@ -35,13 +48,17 @@ export const MapsHandlers = HttpApiBuilder.group(FoglightApi, "maps", (handlers)
     return handlers
       .handle("list", () => store.listMaps.pipe(Effect.mapError(fail)))
       .handle("snapshot", ({ path }) =>
-        store.snapshot(decodeId(path.id)).pipe(Effect.mapError(fail)),
+        store
+          .snapshot(decodeId(path.id))
+          .pipe(Effect.mapError(asSnapshotError(store.adapter.kind))),
       )
       .handle("body", ({ path }) =>
-        store.loadMapBody(decodeId(path.id)).pipe(Effect.mapError(fail)),
+        store.loadMapBody(decodeId(path.id)).pipe(Effect.mapError(asBodyError(store.adapter.kind))),
       )
       .handle("ticketBody", ({ path }) =>
-        store.loadTicketBody(decodeId(path.id), decodeId(path.tid)).pipe(Effect.mapError(fail)),
+        store
+          .loadTicketBody(decodeId(path.id), decodeId(path.tid))
+          .pipe(Effect.mapError(asBodyError(store.adapter.kind))),
       );
   }),
 );
@@ -49,6 +66,7 @@ export const MapsHandlers = HttpApiBuilder.group(FoglightApi, "maps", (handlers)
 export const ProjectsHandlers = HttpApiBuilder.group(FoglightApi, "projects", (handlers) =>
   Effect.gen(function* () {
     const session = yield* ProjectSession;
+
     return handlers.handle("list", () => session.list);
   }),
 );

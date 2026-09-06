@@ -10,21 +10,28 @@
  *   2. else a GitHub `origin` remote → GitHub Issues
  *   3. `--tracker local|github` forces the choice
  */
-import { FileSystem, Path, type CommandExecutor, type HttpClient } from "@effect/platform";
+import { FileSystem, Path } from "@effect/platform";
+import type { CommandExecutor, HttpClient } from "@effect/platform";
 import { Effect, Layer, SubscriptionRef } from "effect";
-import { NoTrackerDetected, TrackerUnreachable } from "../domain/errors.js";
-import type { TrackerKind } from "../domain/model.js";
+import { NoTrackerDetected, TrackerUnreachable } from "#core/domain/errors.js";
+import type { TrackerKind } from "#core/domain/model.js";
 import type { TrackerAdapter } from "./adapter.js";
-import { DetectedTracker, type TrackerOverride } from "./detect.js";
-import { makeGitHubAdapter, type GitHubRepo, type PollMode } from "./github.js";
+import { DetectedTracker } from "./detect.js";
+import type { TrackerOverride } from "./detect.js";
+import { makeGitHubAdapter } from "./github.js";
+import type { GitHubRepo, PollMode } from "./github.js";
 import { makeLocalAdapter } from "./local.js";
 
 /** `git@github.com:owner/repo.git`, `https://github.com/owner/repo`, and friends. */
 export const parseGitHubRemote = (remote: string): GitHubRepo | null => {
   const match = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(remote.trim());
-  if (match === null) return null;
+  if (match === null) {
+    return null;
+  }
+
   const owner = match[1];
   const repo = match[2];
+
   return owner === undefined || repo === undefined ? null : { owner, repo };
 };
 
@@ -37,9 +44,14 @@ const readOrigin = (repoRoot: string) =>
     const config = yield* fs
       .readFileString(path.join(repoRoot, ".git", "config"))
       .pipe(Effect.orElseSucceed(() => ""));
+
     const section = /\[remote "origin"\]([\s\S]*?)(?=\n\[|$)/.exec(config);
-    if (section === null) return null;
+    if (section === null) {
+      return null;
+    }
+
     const url = /url\s*=\s*(.+)/.exec(section[1] ?? "");
+
     return url === null ? null : parseGitHubRemote(url[1] ?? "");
   });
 
@@ -72,6 +84,7 @@ export const resolveTracker = (
           ? Effect.succeed(true)
           : fs.exists(path.join(repoRoot, candidate)).pipe(Effect.orElseSucceed(() => false)),
     );
+
     const origin = yield* readOrigin(repoRoot);
 
     const chosen: TrackerKind | null =
@@ -88,6 +101,7 @@ export const resolveTracker = (
           reason: `--tracker local was given, but ${repoRoot} has no .wayfinder/ or wayfinder/ directory`,
         });
       }
+
       return { adapter: yield* makeLocalAdapter(repoRoot), cadence };
     }
 
@@ -100,6 +114,7 @@ export const resolveTracker = (
             : "--tracker github was given, but this clone has no GitHub `origin` remote",
       });
     }
+
     return { adapter: yield* makeGitHubAdapter(origin, cadence), cadence };
   });
 

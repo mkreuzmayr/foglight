@@ -13,9 +13,12 @@ export const hashBody = (markdown: string): string =>
   createHash("sha256").update(markdown).digest("hex").slice(0, 16);
 
 /** YAML-ish frontmatter, split off. We do not pull in a YAML parser for this. */
-export const splitFrontmatter = (source: string): { frontmatter: string; body: string } => {
+export const splitFrontmatter = (source: string) => {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(source);
-  if (match === null) return { frontmatter: "", body: source };
+  if (match === null) {
+    return { frontmatter: "", body: source };
+  }
+
   return { frontmatter: match[1] ?? "", body: source.slice(match[0].length) };
 };
 
@@ -24,15 +27,22 @@ export const splitFrontmatter = (source: string): { frontmatter: string; body: s
  * (`title`, `labels`, `status`, `assignee`, `blocked-by`), so a line reader is
  * honest here — and it cannot fail on prose the way a strict YAML parse would.
  */
-export const parseFrontmatter = (frontmatter: string): Record<string, string> => {
-  const out: Record<string, string> = {};
+export const parseFrontmatter = (frontmatter: string) => {
+  const out: Frontmatter = {};
   for (const line of frontmatter.split(/\r?\n/)) {
     const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
-    if (match === null) continue;
+    if (match === null) {
+      continue;
+    }
+
     const key = match[1];
-    if (key === undefined) continue;
+    if (key === undefined) {
+      continue;
+    }
+
     out[key] = unquote((match[2] ?? "").trim());
   }
+
   return out;
 };
 
@@ -40,9 +50,13 @@ const unquote = (value: string): string =>
   /^"[\s\S]*"$/.test(value) || /^'[\s\S]*'$/.test(value) ? value.slice(1, -1) : value;
 
 /** `[a, b]` or `a, b` → `["a", "b"]`. Empty and `[]` both mean none. */
-export const parseInlineList = (value: string | undefined): ReadonlyArray<string> => {
-  if (value === undefined) return [];
+export const parseInlineList = (value: string | undefined): readonly string[] => {
+  if (value === undefined) {
+    return [];
+  }
+
   const inner = value.trim().replace(/^\[/, "").replace(/\]$/, "");
+
   return inner
     .split(",")
     .map((s) => unquote(s.trim()))
@@ -56,26 +70,28 @@ export const parseInlineList = (value: string | undefined): ReadonlyArray<string
 export const splitSections = (body: string): ReadonlyMap<string, string> => {
   const sections = new Map<string, string>();
   const lines = body.split(/\r?\n/);
-  let heading = "";
-  let buffer: string[] = [];
+  const cursor = { heading: "", buffer: new Array<string>() };
 
   const flush = () => {
-    const existing = sections.get(heading);
-    const text = buffer.join("\n").trim();
-    sections.set(heading, existing === undefined ? text : `${existing}\n${text}`);
+    const existing = sections.get(cursor.heading);
+    const text = cursor.buffer.join("\n").trim();
+    sections.set(cursor.heading, existing === undefined ? text : `${existing}\n${text}`);
   };
 
   for (const line of lines) {
     const match = /^##\s+(.+?)\s*$/.exec(line);
     if (match === null) {
-      buffer.push(line);
+      cursor.buffer.push(line);
       continue;
     }
+
     flush();
-    heading = (match[1] ?? "").toLowerCase();
-    buffer = [];
+    cursor.heading = (match[1] ?? "").toLowerCase();
+    cursor.buffer = [];
   }
+
   flush();
+
   return sections;
 };
 
@@ -87,21 +103,28 @@ export const stripComments = (markdown: string): string =>
  * A list entry as wayfinder writes it in Decisions-so-far, Not-yet-specified
  * and Out-of-scope: one `- ` bullet, possibly wrapped over several lines.
  */
-export const listEntries = (section: string): ReadonlyArray<string> => {
+export const listEntries = (section: string): readonly string[] => {
   const entries: string[] = [];
-  let current: string[] = [];
+  const current: string[] = [];
   for (const line of stripComments(section).split(/\r?\n/)) {
     if (/^\s*-\s+/.test(line)) {
-      if (current.length > 0) entries.push(current.join(" ").trim());
-      current = [line.replace(/^\s*-\s+/, "")];
+      if (current.length > 0) {
+        entries.push(current.join(" ").trim());
+      }
+
+      current.splice(0, current.length, line.replace(/^\s*-\s+/, ""));
     } else if (current.length > 0 && line.trim() !== "") {
       current.push(line.trim());
     } else if (line.trim() === "" && current.length > 0) {
       entries.push(current.join(" ").trim());
-      current = [];
+      current.length = 0;
     }
   }
-  if (current.length > 0) entries.push(current.join(" ").trim());
+
+  if (current.length > 0) {
+    entries.push(current.join(" ").trim());
+  }
+
   return entries.filter((e) => e.length > 0);
 };
 
@@ -111,12 +134,14 @@ export const listEntries = (section: string): ReadonlyArray<string> => {
  * entry leads with a bold term; a content hash covers the ones that don't.
  * Non-conforming entries are explicitly **not** warned about.
  */
-export const entryKey = (entry: string): { slug: string; term: string } => {
+export const entryKey = (entry: string) => {
   const bold = /^\*\*(.+?)\*\*/.exec(entry.trim());
   if (bold !== null) {
     const term = (bold[1] ?? "").trim();
+
     return { slug: slugify(term), term };
   }
+
   // Fallback: hash the content, and show a leading clause as the term so the
   // rail still has something readable to print.
   const term =
@@ -124,6 +149,7 @@ export const entryKey = (entry: string): { slug: string; term: string } => {
       .replace(/^\W+/, "")
       .split(/\s+—\s+|\s+--\s+|[.;]/)[0]
       ?.trim() ?? entry;
+
   return { slug: `h-${hashBody(entry).slice(0, 8)}`, term: truncate(term, 80) };
 };
 
@@ -145,9 +171,7 @@ export const entryDetail = (entry: string): string =>
     .trim();
 
 /** `[Title](link) — gist` — the shape of a Decisions-so-far line. */
-export const parseDecisionLine = (
-  entry: string,
-): { title: string; link: string | null; gist: string } => {
+export const parseDecisionLine = (entry: string) => {
   const linked = /^\[(.+?)\]\((.+?)\)\s*(?:—|--|–|:)?\s*([\s\S]*)$/.exec(entry.trim());
   if (linked !== null) {
     return {
@@ -156,10 +180,14 @@ export const parseDecisionLine = (
       gist: (linked[3] ?? "").trim(),
     };
   }
+
   const parts = entry.split(/\s+—\s+|\s+--\s+/);
+
   return {
     title: (parts[0] ?? entry).trim(),
     link: null,
     gist: parts.slice(1).join(" — ").trim(),
   };
 };
+
+type Frontmatter = Record<string, string>;

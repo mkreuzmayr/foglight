@@ -1,7 +1,8 @@
 /**
  * Two real `foglight serve` processes against one isolated daemon.
  */
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,23 +36,39 @@ const writeProject = async (dir: string): Promise<void> => {
   await writeFile(join(dir, ".wayfinder", "map.md"), MAP);
 };
 
-const waitForUrl = async (child: ChildProcess, timeoutMs = 15_000): Promise<string> => {
-  const start = Date.now();
-  let buf = "";
+const waitForUrl = (child: ChildProcess, timeoutMs = 15_000): Promise<string> => {
+  const output: string[] = [];
+
   return new Promise((resolve, reject) => {
-    const onData = (chunk: Buffer) => {
-      buf += chunk.toString("utf8");
-      const match = buf.match(/http:\/\/127\.0\.0\.1:\d+\//);
-      if (match !== null) resolve(match[0]);
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.stderr?.off("data", onData);
+      child.off("exit", onExit);
     };
+
+    const onData = (chunk: Buffer) => {
+      output.push(chunk.toString("utf8"));
+      const match = /http:\/\/127\.0\.0\.1:\d+\//.exec(output.join(""));
+      if (match !== null) {
+        cleanup();
+        resolve(match[0]);
+      }
+    };
+
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(new Error(`serve exited with ${code}: ${output.join("")}`));
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for URL\n${output.join("")}`));
+    }, timeoutMs);
+
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
-    const timer = setInterval(() => {
-      if (Date.now() - start > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error(`timed out waiting for URL\n${buf}`));
-      }
-    }, 50);
+    child.once("exit", onExit);
   });
 };
 
@@ -62,54 +79,58 @@ const serve = (env: NodeJS.ProcessEnv, dir: string, port: number): ChildProcess 
   });
 
 describe("two foglight serve processes", () => {
-  let runtimeDir = "";
-  let children: ChildProcess[] = [];
+  type Processes = { runtimeDir: string; children: ChildProcess[] };
+  const processes: Processes = { runtimeDir: "", children: [] };
 
   beforeAll(() => {
     const result = spawnSync("pnpm", ["exec", "tsdown"], {
       cwd: fileURLToPath(new URL("..", import.meta.url)),
       encoding: "utf8",
     });
+
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || "tsdown failed");
     }
   });
 
   afterEach(async () => {
-    for (const child of children) {
+    for (const child of processes.children) {
       child.kill("SIGTERM");
     }
-    children = [];
-    if (runtimeDir !== "") await rm(runtimeDir, { recursive: true, force: true });
+
+    processes.children = [];
+    if (processes.runtimeDir !== "") {
+      await rm(processes.runtimeDir, { recursive: true, force: true });
+    }
   });
 
   it("share a daemon and detach independently", async () => {
-    runtimeDir = await mkdtemp(join(tmpdir(), "foglight-int-"));
-    const clientDir = join(runtimeDir, "client");
-    const a = join(runtimeDir, "a");
-    const b = join(runtimeDir, "b");
+    processes.runtimeDir = await mkdtemp(join(tmpdir(), "foglight-int-"));
+    const clientDir = join(processes.runtimeDir, "client");
+    const a = join(processes.runtimeDir, "a");
+    const b = join(processes.runtimeDir, "b");
     await mkdir(clientDir);
-    await mkdir(join(runtimeDir, "state"));
+    await mkdir(join(processes.runtimeDir, "state"));
     await writeProject(a);
     await writeProject(b);
 
     const port = 41000 + (process.pid % 1000);
     const env = {
       ...process.env,
-      FOGLIGHT_RUNTIME_DIR: join(runtimeDir, "state"),
+      FOGLIGHT_RUNTIME_DIR: join(processes.runtimeDir, "state"),
       FOGLIGHT_CLIENT_DIR: clientDir,
     };
 
     const first = serve(env, a, port);
-    children.push(first);
+    processes.children.push(first);
     const url = await waitForUrl(first);
 
-    const one = (await (await fetch(`${url}api/projects`)).json()) as Array<{ path: string }>;
+    const one = (await (await fetch(`${url}api/projects`)).json()) as { path: string }[];
     expect(one).toHaveLength(1);
     expect(one[0]?.path).toContain("/a");
 
     const second = serve(env, b, port);
-    children.push(second);
+    processes.children.push(second);
     await waitForUrl(second);
 
     await expect
@@ -126,6 +147,7 @@ describe("two foglight serve processes", () => {
       .poll(async () => {
         try {
           await fetch(`${url}api/projects`);
+
           return "up";
         } catch {
           return "down";

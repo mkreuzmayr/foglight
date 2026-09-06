@@ -35,6 +35,7 @@ export const runtimeLayout = (input: LayoutInput): RuntimeLayout => {
     const dir = override.replace(/[/\\]+$/, "");
     if (input.platform === "win32") {
       const leaf = dir.split("\\").pop() ?? "foglight";
+
       return {
         dir,
         claimPath: `${dir}\\claim`,
@@ -42,6 +43,7 @@ export const runtimeLayout = (input: LayoutInput): RuntimeLayout => {
         logPath: `${dir}\\daemon.log`,
       };
     }
+
     return posix(dir);
   }
 
@@ -50,7 +52,9 @@ export const runtimeLayout = (input: LayoutInput): RuntimeLayout => {
       /\\+$/,
       "",
     );
+
     const dir = `${local}\\foglight`;
+
     return {
       dir,
       claimPath: `${dir}\\claim`,
@@ -62,6 +66,7 @@ export const runtimeLayout = (input: LayoutInput): RuntimeLayout => {
   if (input.platform === "darwin") {
     const dir = `${input.homedir}/Library/Application Support/foglight`;
     const tmp = input.tmpdir.replace(/\/+$/, "");
+
     return posix(dir, `${tmp}/foglight.sock`);
   }
 
@@ -69,7 +74,9 @@ export const runtimeLayout = (input: LayoutInput): RuntimeLayout => {
   if (runtime !== undefined && runtime !== "") {
     return posix(`${runtime}/foglight`);
   }
+
   const dir = `/tmp/foglight-${input.uid}`;
+
   return {
     ...posix(dir),
     warning: `XDG_RUNTIME_DIR is unset; using ${dir} (may not be removed at logout)`,

@@ -10,8 +10,10 @@
  * accordion, because links get pasted — especially from headless, where the
  * point is to send someone a URL.
  */
+import { makeId } from "@foglight/core/domain";
 import type { ResourceId } from "@foglight/core/domain";
-import { useCallback, useEffect, useState } from "react";
+import { Schema } from "effect";
+import { useEffect, useState } from "react";
 
 const REMEMBERED = "foglight:last-map";
 
@@ -26,28 +28,43 @@ const read = (): Address => {
   const params = new URLSearchParams(window.location.search);
   const map = params.get("map");
   const ticket = params.get("ticket");
+
   return {
-    map: map === null || map === "" ? null : (map as ResourceId),
-    ticket: ticket === null || ticket === "" ? null : (ticket as ResourceId),
+    map: map === null || map === "" ? null : makeId(map),
+    ticket: ticket === null || ticket === "" ? null : makeId(ticket),
   };
 };
 
 const readRemembered = (): StoredRemembered | null => {
   try {
     const raw = window.localStorage.getItem(REMEMBERED);
-    if (raw === null || raw === "") return null;
+    if (raw === null || raw === "") {
+      return null;
+    }
+
     if (raw.startsWith("{")) {
-      const parsed = JSON.parse(raw) as { id?: unknown; title?: unknown; projectName?: unknown };
+      const parsed = Schema.decodeUnknownSync(
+        Schema.parseJson(
+          Schema.Struct({
+            id: Schema.String,
+            title: Schema.optional(Schema.Unknown),
+            projectName: Schema.optional(Schema.Unknown),
+          }),
+        ),
+      )(raw);
+
       if (typeof parsed.id === "string" && parsed.id !== "") {
         return {
-          id: parsed.id as ResourceId,
+          id: makeId(parsed.id),
           title: typeof parsed.title === "string" ? parsed.title : "",
           projectName: typeof parsed.projectName === "string" ? parsed.projectName : "",
         };
       }
+
       return null;
     }
-    return { id: raw as ResourceId, title: "", projectName: "" };
+
+    return { id: makeId(raw), title: "", projectName: "" };
   } catch {
     return null; // private mode, or storage disabled — not worth failing over
   }
@@ -57,7 +74,10 @@ export const rememberedMap = (): ResourceId | null => readRemembered()?.id ?? nu
 
 export const rememberedInfo = (): RememberedInfo | null => {
   const stored = readRemembered();
-  if (stored === null || stored.title === "") return null;
+  if (stored === null || stored.title === "") {
+    return null;
+  }
+
   return { title: stored.title, projectName: stored.projectName };
 };
 
@@ -67,9 +87,10 @@ export const rememberMap = (id: ResourceId, info?: RememberedInfo): void => {
     const same = previous?.id === id;
     const payload: StoredRemembered = {
       id,
-      title: info?.title || (same ? previous.title : "") || "",
-      projectName: info?.projectName || (same ? previous.projectName : "") || "",
+      title: rememberedText(info?.title, same ? previous.title : ""),
+      projectName: rememberedText(info?.projectName, same ? previous.projectName : ""),
     };
+
     window.localStorage.setItem(REMEMBERED, JSON.stringify(payload));
   } catch {
     /* see above */
@@ -79,39 +100,45 @@ export const rememberMap = (id: ResourceId, info?: RememberedInfo): void => {
 export const useAddress = () => {
   const [address, setAddress] = useState<Address>(read);
 
+  // oxlint-disable-next-line mkrz/no-restricted-react-hooks -- Subscribe to browser history navigation and remove the popstate listener on unmount.
   useEffect(() => {
     const onPop = () => setAddress(read());
     window.addEventListener("popstate", onPop);
+
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  const write = useCallback((next: Address, replace = false) => {
+  const write = (next: Address, replace = false) => {
     const params = new URLSearchParams();
-    if (next.map !== null) params.set("map", String(next.map));
-    if (next.ticket !== null) params.set("ticket", String(next.ticket));
+    if (next.map !== null) {
+      params.set("map", String(next.map));
+    }
+
+    if (next.ticket !== null) {
+      params.set("ticket", String(next.ticket));
+    }
+
     const url = params.toString() === "" ? "/" : `/?${params.toString()}`;
-    if (replace) window.history.replaceState(null, "", url);
-    else window.history.pushState(null, "", url);
+    if (replace) {
+      window.history.replaceState(null, "", url);
+    } else {
+      window.history.pushState(null, "", url);
+    }
+
     setAddress(next);
-  }, []);
+  };
 
-  const selectTicket = useCallback(
-    (ticket: ResourceId | null) => {
-      // Selecting within a map replaces rather than pushes: clicking six cards
-      // should not cost six presses of the back button.
-      write({ map: address.map, ticket }, true);
-    },
-    [address.map, write],
-  );
+  const selectTicket = (ticket: ResourceId | null) => {
+    // Selecting within a map replaces rather than pushes: clicking six cards
+    // should not cost six presses of the back button.
+    write({ map: address.map, ticket }, true);
+  };
 
-  const openMap = useCallback(
-    (map: ResourceId, info?: RememberedInfo) => {
-      rememberMap(map, info);
-      // Switching is a full replace — the old `?ticket` means nothing here.
-      write({ map, ticket: null });
-    },
-    [write],
-  );
+  const openMap = (map: ResourceId, info?: RememberedInfo) => {
+    rememberMap(map, info);
+    // Switching is a full replace — the old `?ticket` means nothing here.
+    write({ map, ticket: null });
+  };
 
   return { address, selectTicket, openMap, write };
 };
@@ -126,15 +153,27 @@ export const useAddress = () => {
 export const resolveInitialMap = (
   explicit: ResourceId | null,
   remembered: ResourceId | null,
-  available: ReadonlyArray<{ id: ResourceId }>,
+  available: readonly { id: ResourceId }[],
 ): ResourceId | null => {
   const exists = (id: ResourceId | null) =>
     id !== null && available.some((m) => String(m.id) === String(id));
 
-  if (exists(explicit)) return explicit;
-  if (exists(remembered)) return remembered;
+  if (exists(explicit)) {
+    return explicit;
+  }
+
+  if (exists(remembered)) {
+    return remembered;
+  }
+
   // A remembered id whose project isn't attached: wait for re-attach.
   // Never silently open a different project's map (ticket 003).
-  if (remembered !== null) return null;
+  if (remembered !== null) {
+    return null;
+  }
+
   return available.length === 1 ? (available[0]?.id ?? null) : null;
 };
+
+const rememberedText = (current: string | undefined, previous: string) =>
+  current === undefined || current === "" ? previous : current;

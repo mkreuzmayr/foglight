@@ -4,10 +4,11 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "types": ["vite/client"],
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "declaration": false,
+    "declarationMap": false
   },
   "include": ["src", "test", "vite.config.ts"]
 }

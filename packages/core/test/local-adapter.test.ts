@@ -7,17 +7,18 @@
 import { NodeContext } from "@effect/platform-node";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { frontier, stateOf } from "../src/domain/derive.js";
-import { makeId, type MapSnapshot } from "../src/domain/model.js";
+import { frontier, stateOf } from "#core/domain/derive.js";
+import { makeId } from "#core/domain/model.js";
+import type { MapSnapshot } from "#core/domain/model.js";
 import {
   entryKey,
   parseInlineList,
   splitFrontmatter,
   splitSections,
-} from "../src/parse/markdown.js";
-import { parseMapBody, parseTicketBody } from "../src/parse/body.js";
-import { makeLocalAdapter } from "../src/tracker/local.js";
-import { parseGitHubRemote } from "../src/tracker/resolve.js";
+} from "#core/parse/markdown.js";
+import { parseMapBody, parseTicketBody } from "#core/parse/body.js";
+import { makeLocalAdapter } from "#core/tracker/local.js";
+import { parseGitHubRemote } from "#core/tracker/resolve.js";
 
 const repoRoot = new URL("../../../", import.meta.url).pathname;
 
@@ -57,6 +58,7 @@ describe("git remote parsing", () => {
       owner: "pingdotgg",
       repo: "t3code",
     });
+
     expect(parseGitHubRemote("https://github.com/a/b")).toEqual({ owner: "a", repo: "b" });
     expect(parseGitHubRemote("https://gitlab.com/a/b")).toBeNull();
   });
@@ -74,6 +76,7 @@ describe("this repo's map", () => {
   const load = run(
     Effect.gen(function* () {
       const adapter = yield* makeLocalAdapter(repoRoot);
+
       return yield* adapter.loadMap(makeId("local:.wayfinder/map.md"));
     }),
   );
@@ -127,36 +130,23 @@ describe("this repo's map", () => {
     const descriptors = await run(
       Effect.gen(function* () {
         const adapter = yield* makeLocalAdapter(repoRoot);
+
         return yield* adapter.listMaps();
       }),
     );
+
     expect(descriptors).toHaveLength(2);
-    expect(descriptors.map((d) => d.id).sort()).toEqual([
+    expect(descriptors.map((d) => d.id).toSorted()).toEqual([
       "local:.wayfinder/map.md",
       "local:.wayfinder/project-handling.map.md",
     ]);
+
     expect(descriptors.find((d) => d.id === "local:.wayfinder/map.md")?.closedCount).toBe(10);
     expect(descriptors.find((d) => d.id === "local:.wayfinder/map.md")?.openCount).toBe(0);
   });
 });
 
 describe("derivation", () => {
-  const snapshotWith = (
-    tickets: Array<{
-      shortId: string;
-      status: "open" | "closed";
-      assignee: string | null;
-      blockedBy: string[];
-    }>,
-  ) =>
-    ({
-      tickets: tickets.map((t) => ({
-        ...t,
-        id: makeId(`local:${t.shortId}`),
-        malformed: undefined,
-      })),
-    }) as unknown as MapSnapshot;
-
   it("calls an open, unblocked, unclaimed ticket the frontier", () => {
     const snapshot = snapshotWith([
       { shortId: "001", status: "closed", assignee: "me", blockedBy: [] },
@@ -164,6 +154,7 @@ describe("derivation", () => {
       { shortId: "003", status: "open", assignee: null, blockedBy: ["002"] },
       { shortId: "004", status: "open", assignee: "me", blockedBy: [] },
     ]);
+
     expect(frontier(snapshot).map((t) => t.shortId)).toEqual(["002"]);
     expect(stateOf(snapshot.tickets[3]!, snapshot)).toBe("claimed");
     expect(stateOf(snapshot.tickets[2]!, snapshot)).toBe("blocked");
@@ -173,6 +164,7 @@ describe("derivation", () => {
     const snapshot = snapshotWith([
       { shortId: "002", status: "open", assignee: null, blockedBy: ["999"] },
     ]);
+
     expect(frontier(snapshot).map((t) => t.shortId)).toEqual(["002"]);
   });
 });
@@ -195,6 +187,7 @@ describe("map body", () => {
         { shortId: "007", title: "Live-update transport", status: "open" },
       ],
     );
+
     expect(parsed.fog).toHaveLength(2);
     expect(parsed.fog[0]?.hangsOn).toEqual(["004"]);
     // A patch naming nothing floats at the fog band — an answer, not a failure.
@@ -214,9 +207,11 @@ describe("real-world tolerance", () => {
     const descriptors = await run(
       Effect.gen(function* () {
         const adapter = yield* makeLocalAdapter(other);
+
         return yield* adapter.listMaps();
       }),
     );
+
     expect(descriptors.length).toBeGreaterThan(0);
     expect(String(descriptors[0]?.id)).toBe("local:wayfinder/map.md");
   });
@@ -225,9 +220,11 @@ describe("real-world tolerance", () => {
     const snapshot = await run(
       Effect.gen(function* () {
         const adapter = yield* makeLocalAdapter(other);
+
         return yield* adapter.loadMap(makeId("local:wayfinder/map.md"));
       }),
     );
+
     expect(snapshot.tickets.length).toBeGreaterThan(20);
     // The point of the fix: no ticket is malformed merely for spelling it
     // `label:`, and real types come through rather than all defaulting.
@@ -239,9 +236,27 @@ describe("real-world tolerance", () => {
     const snapshot = await run(
       Effect.gen(function* () {
         const adapter = yield* makeLocalAdapter(other);
+
         return yield* adapter.loadMap(makeId("local:wayfinder/map.md"));
       }),
     );
+
     expect(snapshot.tickets.some((t) => t.blockedBy.length > 0)).toBe(true);
   });
 });
+
+const snapshotWith = (
+  tickets: {
+    shortId: string;
+    status: "open" | "closed";
+    assignee: string | null;
+    blockedBy: string[];
+  }[],
+) =>
+  ({
+    tickets: tickets.map((t) => ({
+      ...t,
+      id: makeId(`local:${t.shortId}`),
+      malformed: undefined,
+    })),
+  }) as unknown as MapSnapshot;

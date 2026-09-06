@@ -15,7 +15,7 @@
  * detection.
  */
 import { Context, Effect } from "effect";
-import type { TrackerKind } from "../domain/model.js";
+import type { TrackerKind } from "#core/domain/model.js";
 import type { TrackerAdapter } from "./adapter.js";
 
 export type TrackerOverride = TrackerKind | null;

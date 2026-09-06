@@ -8,7 +8,7 @@ import {
   HelloReplyOk,
   LogLine,
   ShutdownRequest,
-} from "../src/protocol.js";
+} from "#foglight/protocol.js";
 
 const flags = {
   host: "127.0.0.1",
@@ -18,7 +18,7 @@ const flags = {
   tailscaleServePort: 4747,
 };
 
-const roundTrip = (message: Parameters<typeof encode>[0]) => {
+const expectRoundTrip = (message: Parameters<typeof encode>[0]) => {
   const line = encode(message);
   expect(line.endsWith("\n")).toBe(true);
   expect(line.slice(0, -1).includes("\n")).toBe(false);
@@ -27,7 +27,8 @@ const roundTrip = (message: Parameters<typeof encode>[0]) => {
 
 describe("protocol", () => {
   it("round-trips a hello that names a project path", () => {
-    roundTrip(
+    expect.hasAssertions();
+    expectRoundTrip(
       Hello.make({
         type: "hello",
         version: "0.1.0",
@@ -39,11 +40,13 @@ describe("protocol", () => {
   });
 
   it("round-trips a status hello with no path", () => {
-    roundTrip(Hello.make({ type: "hello", version: "0.1.0", verbose: false, flags }));
+    expect.hasAssertions();
+    expectRoundTrip(Hello.make({ type: "hello", version: "0.1.0", verbose: false, flags }));
   });
 
   it("round-trips an ok hello-reply carrying the daemon's flags", () => {
-    roundTrip(
+    expect.hasAssertions();
+    expectRoundTrip(
       HelloReplyOk.make({
         type: "hello-reply",
         ok: true,
@@ -57,7 +60,8 @@ describe("protocol", () => {
   });
 
   it("round-trips a path-already-registered reject", () => {
-    roundTrip(
+    expect.hasAssertions();
+    expectRoundTrip(
       HelloReplyErr.make({
         type: "hello-reply",
         ok: false,
@@ -68,7 +72,8 @@ describe("protocol", () => {
   });
 
   it("round-trips a version-skew reject", () => {
-    roundTrip(
+    expect.hasAssertions();
+    expectRoundTrip(
       HelloReplyErr.make({
         type: "hello-reply",
         ok: false,
@@ -79,10 +84,17 @@ describe("protocol", () => {
   });
 
   it("round-trips lifecycle events, log lines, and shutdown-request", () => {
-    roundTrip(Event.make({ type: "event", kind: "project-joined", path: "/repo", name: "repo" }));
-    roundTrip(Event.make({ type: "event", kind: "project-left", path: "/repo", name: "repo" }));
-    roundTrip(Event.make({ type: "event", kind: "daemon-exiting" }));
-    roundTrip(LogLine.make({ type: "log-line", line: "listening on 4747" }));
-    roundTrip(ShutdownRequest.make({ type: "shutdown-request" }));
+    expect.hasAssertions();
+    expectRoundTrip(
+      Event.make({ type: "event", kind: "project-joined", path: "/repo", name: "repo" }),
+    );
+
+    expectRoundTrip(
+      Event.make({ type: "event", kind: "project-left", path: "/repo", name: "repo" }),
+    );
+
+    expectRoundTrip(Event.make({ type: "event", kind: "daemon-exiting" }));
+    expectRoundTrip(LogLine.make({ type: "log-line", line: "listening on 4747" }));
+    expectRoundTrip(ShutdownRequest.make({ type: "shutdown-request" }));
   });
 });

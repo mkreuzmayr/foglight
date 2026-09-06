@@ -1,11 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"],
-    "baseUrl": ".",
-    "paths": {
-      "#core/*": ["./src/*"]
-    }
+    "types": ["node"]
   },
   "include": ["src", "test"]
 }

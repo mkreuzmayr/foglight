@@ -10,8 +10,9 @@
  * Node ids are the snapshot's qualified ids, not array positions, so layout
  * cannot thrash when a tick reorders anything.
  */
-import type { MapSnapshot } from "@foglight/core/domain";
 import { stateOf } from "@foglight/core/domain";
+import type { MapSnapshot } from "@foglight/core/domain";
+
 import type { Edge, Node } from "@xyflow/react";
 import { layout } from "./layout.js";
 
@@ -21,7 +22,7 @@ const FOG_W = NODE_W - 24;
 const FOG_H = 46;
 export const DESTINATION_ID = "__destination";
 
-export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[] } => {
+export const buildGraph = (snapshot: MapSnapshot, previousNodes?: Node[]) => {
   const byShortId = new Map(snapshot.tickets.map((t) => [t.shortId, t]));
   const closed = snapshot.tickets.filter((t) => t.status === "closed").length;
 
@@ -41,7 +42,10 @@ export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[
   for (const ticket of snapshot.tickets) {
     for (const blocker of ticket.blockedBy) {
       const source = byShortId.get(blocker);
-      if (source === undefined) continue; // dangling: already a warning on the rail
+      if (source === undefined) {
+        continue;
+      } // dangling: already a warning on the rail
+
       edges.push({
         id: `${source.id}->${ticket.id}`,
         source: source.id,
@@ -65,9 +69,13 @@ export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[
       width: FOG_W,
       height: FOG_H,
     });
+
     for (const shortId of patch.hangsOn) {
       const source = byShortId.get(shortId);
-      if (source === undefined) continue;
+      if (source === undefined) {
+        continue;
+      }
+
       edges.push({
         id: `${source.id}->${patch.id}`,
         source: source.id,
@@ -76,6 +84,7 @@ export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[
         style: { stroke: "var(--color-hair)", strokeDasharray: "3 5" },
       });
     }
+
     // Fog gathers only ever *toward* the destination — so every patch has an
     // edge to it, even one that hangs on nothing and floats at the band.
     edges.push({
@@ -87,26 +96,7 @@ export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[
     });
   }
 
-  // With no fog left, the route's own end arrives at the destination — the map
-  // would otherwise show its endpoint floating unconnected. These read a shade
-  // brighter than the fog approach edges: with no fog to carry the weight,
-  // `--color-hair` on the ground is invisible, and an edge nobody can see is
-  // the same as an edge that isn't there.
-  if (snapshot.fog.length === 0) {
-    for (const ticket of snapshot.tickets) {
-      const isTerminal = !snapshot.tickets.some((other) =>
-        other.blockedBy.includes(ticket.shortId),
-      );
-      if (!isTerminal) continue;
-      edges.push({
-        id: `${ticket.id}->${DESTINATION_ID}`,
-        source: ticket.id,
-        target: DESTINATION_ID,
-        type: "drawn",
-        style: { stroke: "var(--color-destination)", strokeDasharray: "2 6", opacity: 0.32 },
-      });
-    }
-  }
+  appendTerminalEdges(snapshot, edges);
 
   nodes.push({
     id: DESTINATION_ID,
@@ -117,7 +107,17 @@ export const buildGraph = (snapshot: MapSnapshot): { nodes: Node[]; edges: Edge[
     height: 116,
   });
 
-  return { nodes: layout(nodes, edges, { rankdir: "LR", ranksep: 104, nodesep: 20 }), edges };
+  return {
+    nodes:
+      previousNodes === undefined
+        ? layout(nodes, edges, { rankdir: "LR", ranksep: 104, nodesep: 20 })
+        : nodes.map((node) => ({
+            ...node,
+            position:
+              previousNodes.find((previous) => previous.id === node.id)?.position ?? node.position,
+          })),
+    edges,
+  };
 };
 
 /**
@@ -139,6 +139,7 @@ export const decorateFirstPaint = (graph: { nodes: Node[]; edges: Edge[] }) => {
   const xs = graph.nodes.map((n) => n.position.x);
   const minX = Math.min(...xs, 0);
   const spanX = Math.max(...xs, 1) - minX || 1;
+
   return {
     nodes: graph.nodes.map((node, i) => ({
       ...node,
@@ -147,7 +148,35 @@ export const decorateFirstPaint = (graph: { nodes: Node[]; edges: Edge[] }) => {
     edges: graph.edges.map((edge) => {
       const sourceX = graph.nodes.find((n) => n.id === edge.source)?.position.x ?? minX;
       const delay = Math.round(((sourceX - minX) / spanX) * 260 + 60);
+
       return { ...edge, data: { ...edge.data, enter: true, delay } };
     }),
   };
+};
+
+const appendTerminalEdges = (snapshot: MapSnapshot, edges: Edge[]) => {
+  // With no fog left, the route's own end arrives at the destination — the map
+  // would otherwise show its endpoint floating unconnected. These read a shade
+  // brighter than the fog approach edges: with no fog to carry the weight,
+  // `--color-hair` on the ground is invisible, and an edge nobody can see is
+  // the same as an edge that isn't there.
+  if (snapshot.fog.length === 0) {
+    for (const ticket of snapshot.tickets) {
+      const isTerminal = !snapshot.tickets.some((other) =>
+        other.blockedBy.includes(ticket.shortId),
+      );
+
+      if (!isTerminal) {
+        continue;
+      }
+
+      edges.push({
+        id: `${ticket.id}->${DESTINATION_ID}`,
+        source: ticket.id,
+        target: DESTINATION_ID,
+        type: "drawn",
+        style: { stroke: "var(--color-destination)", strokeDasharray: "2 6", opacity: 0.32 },
+      });
+    }
+  }
 };

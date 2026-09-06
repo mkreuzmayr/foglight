@@ -17,6 +17,9 @@
     "dist"
   ],
   "type": "module",
+  "imports": {
+    "#foglight/*.js": "./src/*.ts"
+  },
   "scripts": {
     "build": "tsdown && node ./scripts/copy-client.mjs",
     "typecheck": "tsc -p tsconfig.json",

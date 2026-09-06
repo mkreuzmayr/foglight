@@ -12,9 +12,9 @@
  */
 import { chromium } from "playwright";
 
-const URL_BASE = process.env["FOGLIGHT_URL"] ?? "http://127.0.0.1:4747";
+const URL_BASE = process.env.FOGLIGHT_URL ?? "http://127.0.0.1:4747";
 
-const checks: Array<[string, boolean, string]> = [];
+const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail = "") => checks.push([name, ok, detail]);
 
 const main = async () => {
@@ -23,13 +23,15 @@ const main = async () => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "error") {
+      errors.push(message.text());
+    }
   });
 
   await page.goto(URL_BASE, { waitUntil: "networkidle" });
   await page.waitForTimeout(800);
 
-  const picker = page.locator('[role="dialog"][aria-label="Map picker"]');
+  const picker = page.getByRole("dialog", { name: "Map picker" });
   const pickerWasForced = (await picker.count()) === 1;
   check(
     "cold start with several maps opens the picker",
@@ -43,6 +45,7 @@ const main = async () => {
       "picker search is focused on open",
       await search.evaluate((el) => el === document.activeElement),
     );
+
     await page.keyboard.press("Enter");
     await page.waitForTimeout(500);
   }
@@ -134,11 +137,11 @@ const main = async () => {
   await page.screenshot({ path: "/tmp/foglight-cockpit.png", fullPage: false });
   await browser.close();
 
-  let failed = 0;
+  const failed = checks.filter(([, ok]) => !ok).length;
   for (const [name, ok, detail] of checks) {
-    if (!ok) failed += 1;
     console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail === "" ? "" : `  — ${detail}`}`);
   }
+
   console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
   process.exit(failed === 0 ? 0 : 1);
 };

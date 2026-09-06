@@ -21,31 +21,42 @@ const indexTickets = (snapshot: MapSnapshot): ReadonlyMap<string, TicketNode> =>
  */
 export const isUnblocked = (ticket: TicketNode, snapshot: MapSnapshot): boolean => {
   const byShortId = indexTickets(snapshot);
+
   return ticket.blockedBy.every((id) => {
     const blocker = byShortId.get(id);
+
     return blocker === undefined || blocker.status === "closed";
   });
 };
 
 export const stateOf = (ticket: TicketNode, snapshot: MapSnapshot): TicketState => {
-  if (ticket.malformed !== undefined) return "invalid";
-  if (ticket.status === "closed") return "closed";
-  if (!isUnblocked(ticket, snapshot)) return "blocked";
+  if (ticket.malformed !== undefined) {
+    return "invalid";
+  }
+
+  if (ticket.status === "closed") {
+    return "closed";
+  }
+
+  if (!isUnblocked(ticket, snapshot)) {
+    return "blocked";
+  }
+
   return ticket.assignee === null ? "frontier" : "claimed";
 };
 
 /** Open, unblocked, unclaimed — the edge of the known, takeable now. */
-export const frontier = (snapshot: MapSnapshot): ReadonlyArray<TicketNode> =>
+export const frontier = (snapshot: MapSnapshot): readonly TicketNode[] =>
   snapshot.tickets.filter((t) => stateOf(t, snapshot) === "frontier");
 
-export const claimed = (snapshot: MapSnapshot): ReadonlyArray<TicketNode> =>
+export const claimed = (snapshot: MapSnapshot): readonly TicketNode[] =>
   snapshot.tickets.filter((t) => stateOf(t, snapshot) === "claimed");
 
-export const blocked = (snapshot: MapSnapshot): ReadonlyArray<TicketNode> =>
+export const blocked = (snapshot: MapSnapshot): readonly TicketNode[] =>
   snapshot.tickets.filter((t) => stateOf(t, snapshot) === "blocked");
 
 /** The route actually walked. */
-export const decisionsSoFar = (snapshot: MapSnapshot): ReadonlyArray<TicketNode> =>
+export const decisionsSoFar = (snapshot: MapSnapshot): readonly TicketNode[] =>
   snapshot.tickets.filter((t) => t.status === "closed");
 
 export const progress = (snapshot: MapSnapshot) => ({

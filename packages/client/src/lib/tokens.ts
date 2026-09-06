@@ -18,15 +18,12 @@ import {
   UserFocus,
   Warning,
   Wrench,
-  type Icon,
 } from "@phosphor-icons/react";
+import type { Icon } from "@phosphor-icons/react";
 
 import type { TicketState, TicketType } from "@foglight/core/domain";
 
-export const stateStyle: Record<
-  TicketState,
-  { label: string; text: string; border: string; bg: string; dot: string }
-> = {
+export const stateStyle = {
   frontier: {
     label: "frontier",
     text: "text-accent",
@@ -62,27 +59,30 @@ export const stateStyle: Record<
     bg: "bg-panel-2",
     dot: "bg-invalid",
   },
-};
+} satisfies Record<
+  TicketState,
+  { label: string; text: string; border: string; bg: string; dot: string }
+>;
 
 /** Type is carried by an icon + word, never by colour — colour is state's job. */
-export const typeIcon: Record<TicketType, Icon> = {
+export const typeIcon = {
   research: MagnifyingGlass,
   prototype: Cube,
   grilling: ChatsCircle,
   task: Wrench,
-};
+} satisfies Record<TicketType, Icon>;
 
-export const stateIcon: Record<TicketState, Icon> = {
+export const stateIcon = {
   closed: CheckCircle,
   frontier: ArrowRight,
   claimed: UserFocus,
   blocked: Lock,
   invalid: Warning,
-};
+} satisfies Record<TicketState, Icon>;
 
-export const typeLabel: Record<TicketType, string> = {
+export const typeLabel = {
   research: "research",
   prototype: "prototype",
   grilling: "grilling",
   task: "task",
-};
+} satisfies Record<TicketType, string>;

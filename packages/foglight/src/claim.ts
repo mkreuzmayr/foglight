@@ -2,7 +2,8 @@
  * The O_EXCL claim file that decides who spawns the daemon
  * (research/daemon-discovery.md). `wx` is atomic on every local filesystem.
  */
-import { FileSystem, Error as PlatformError } from "@effect/platform";
+import { FileSystem } from "@effect/platform";
+import type { Error as PlatformError } from "@effect/platform";
 import { Effect, Schema } from "effect";
 
 export class ClaimRecord extends Schema.Class<ClaimRecord>("ClaimRecord")({
@@ -45,9 +46,12 @@ export const readClaim = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const raw = yield* fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
-    if (raw.trim() === "") return null;
+    if (raw.trim() === "") {
+      return null;
+    }
+
     try {
-      return yield* Schema.decodeUnknown(ClaimRecord)(JSON.parse(raw) as unknown).pipe(
+      return yield* Schema.decodeUnknown(ClaimRecord)(JSON.parse(raw)).pipe(
         Effect.orElseSucceed(() => null),
       );
     } catch {
@@ -59,8 +63,9 @@ export const readClaim = (
 export const isProcessAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
   }
 };

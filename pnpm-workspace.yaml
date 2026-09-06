@@ -12,3 +12,6 @@ allowBuilds:
   esbuild: true
   "@parcel/watcher": true
   msgpackr-extract: true
+
+minimumReleaseAgeExclude:
+  - "@mkrz/oxlint-config@0.1.1"

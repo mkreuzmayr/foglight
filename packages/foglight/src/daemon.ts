@@ -11,26 +11,16 @@ import {
 } from "@foglight/server";
 import { Effect, ManagedRuntime } from "effect";
 import { chmod, realpath, unlink } from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
+import { createServer } from "node:net";
+import type { Socket } from "node:net";
 import { writeClaim, releaseClaim } from "./claim.js";
-import { hostLayout, type RuntimeLayout } from "./layout.js";
-import {
-  LogLine,
-  decodeLine,
-  encode,
-  Event,
-  HelloReplyErr,
-  HelloReplyOk,
-  type Hello,
-  type Message,
-  type ServeFlags,
-} from "./protocol.js";
-import {
-  FUNNEL_WARNING,
-  startTailscaleServe,
-  tailnetAddress,
-  type ServeHandle,
-} from "./tailscale.js";
+import { hostLayout } from "./layout.js";
+import type { RuntimeLayout } from "./layout.js";
+import { LogLine, decodeLine, encode, Event, HelloReplyErr, HelloReplyOk } from "./protocol.js";
+import type { Hello, Message, ServeFlags } from "./protocol.js";
+import { FUNNEL_WARNING, startTailscaleServe, tailnetAddress } from "./tailscale.js";
+import type { ServeHandle } from "./tailscale.js";
 
 export type DaemonInput = {
   readonly layout: RuntimeLayout;
@@ -49,23 +39,27 @@ const send = (socket: Socket, message: Message): void => {
   socket.write(encode(message));
 };
 
-const asRefs = (projects: ReadonlyArray<{ name: string; path: string }>) =>
+const asRefs = (projects: readonly { name: string; path: string }[]) =>
   projects.map((p) => ({ name: p.name, path: p.path }));
 
 const readMessages = (socket: Socket, onMessage: (message: Message) => void): void => {
-  let buf = "";
+  type ReaderState = { buf: string };
+  const readerState: ReaderState = { buf: "" };
   socket.on("data", (chunk) => {
-    buf += chunk.toString("utf8");
-    let nl = buf.indexOf("\n");
-    while (nl >= 0) {
-      const line = buf.slice(0, nl + 1);
-      buf = buf.slice(nl + 1);
+    readerState.buf += chunk.toString("utf8");
+    for (;;) {
+      const newline = readerState.buf.indexOf("\n");
+      if (newline < 0) {
+        break;
+      }
+
+      const line = readerState.buf.slice(0, newline + 1);
+      readerState.buf = readerState.buf.slice(newline + 1);
       try {
         onMessage(decodeLine(line));
       } catch {
         /* drop a torn line; the next one will resync */
       }
-      nl = buf.indexOf("\n");
     }
   });
 };
@@ -82,13 +76,19 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
   );
 
   const peers = new Set<Peer>();
-  let shuttingDown = false;
-  let serveHandle: ServeHandle | null = null;
-  let url = `http://${host}:${flags.port}/`;
+  type Daemon = { shuttingDown: boolean; serveHandle: ServeHandle | null; url: string };
+  const daemon: Daemon = {
+    shuttingDown: false,
+    serveHandle: null,
+    url: `http://${host}:${flags.port}/`,
+  };
 
   const broadcast = (message: Message, except?: Socket): void => {
     for (const peer of peers) {
-      if (peer.socket === except) continue;
+      if (peer.socket === except) {
+        continue;
+      }
+
       send(peer.socket, message);
     }
   };
@@ -96,16 +96,25 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
   const attacherCount = (): number => [...peers].filter((p) => p.path !== undefined).length;
 
   const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (daemon.shuttingDown) {
+      return;
+    }
+
+    daemon.shuttingDown = true;
     broadcast(Event.make({ type: "event", kind: "daemon-exiting" }));
     await runtime.runPromise(releaseClaim(input.layout.claimPath)).catch(() => undefined);
-    if (serveHandle !== null) await serveHandle.stop();
-    for (const peer of peers) peer.socket.destroy();
+    if (daemon.serveHandle !== null) {
+      await daemon.serveHandle.stop();
+    }
+
+    for (const peer of peers) {
+      peer.socket.destroy();
+    }
+
     // Watchers and detect-loops are forkDaemon fibers; dispose can hang on
     // them. Bound it so last-detach actually exits instead of leaving a
     // process that has already torn down Tailscale and is no longer serving.
-    await Promise.race([runtime.dispose(), new Promise((resolve) => setTimeout(resolve, 1500))]);
+    await Promise.race([runtime.dispose(), delay(1500)]);
     process.exit(0);
   };
 
@@ -121,11 +130,11 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
 
     const address = await runtime.runPromise(boundAddress);
     const port = address._tag === "TcpAddress" ? address.port : flags.port;
-    url = `http://${host}:${port}/`;
+    daemon.url = `http://${host}:${port}/`;
 
     if (flags.tailscaleServe) {
-      serveHandle = await startTailscaleServe(flags.tailscaleServePort);
-      url = serveHandle.url;
+      daemon.serveHandle = await startTailscaleServe(flags.tailscaleServePort);
+      daemon.url = daemon.serveHandle.url;
       console.log(FUNNEL_WARNING);
     } else if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       console.log(
@@ -157,6 +166,7 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
       ipc.once("error", reject);
       ipc.listen({ path: input.layout.socketPath }, () => resolve());
     });
+
     if (process.platform !== "win32") {
       await chmod(input.layout.socketPath, 0o600).catch(() => undefined);
     }
@@ -172,6 +182,7 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
             message: `daemon is ${input.version}; attacher is ${hello.version}`,
           }),
         );
+
         return;
       }
 
@@ -185,12 +196,13 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
             type: "hello-reply",
             ok: true,
             pid: process.pid,
-            url,
+            url: daemon.url,
             version: input.version,
             flags,
             projects: asRefs(listed),
           }),
         );
+
         return;
       }
 
@@ -206,12 +218,14 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
             message: "this path is already registered",
           }),
         );
+
         return;
       }
 
       const attached = await runtime.runPromise(
         attachProject({ path: canonical, tracker: hello.tracker ?? null }).pipe(Effect.either),
       );
+
       if (attached._tag === "Left") {
         send(
           peer.socket,
@@ -222,6 +236,7 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
             message: String(attached.left),
           }),
         );
+
         return;
       }
 
@@ -233,12 +248,13 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
           type: "hello-reply",
           ok: true,
           pid: process.pid,
-          url,
+          url: daemon.url,
           version: input.version,
           flags,
           projects: asRefs(after),
         }),
       );
+
       broadcast(
         Event.make({
           type: "event",
@@ -248,6 +264,7 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
         }),
         peer.socket,
       );
+
       console.log(`project joined: ${attached.right.name} (${canonical})`);
     };
 
@@ -259,33 +276,48 @@ export const runDaemon = async (input: DaemonInput): Promise<void> => {
           peer.verbose = message.verbose;
           void handleHello(peer, message);
         }
-        if (message.type === "shutdown-request") void shutdown();
+
+        if (message.type === "shutdown-request") {
+          void shutdown();
+        }
       });
+
       socket.on("close", () => {
         peers.delete(peer);
-        if (peer.path === undefined) return;
+        if (peer.path === undefined) {
+          return;
+        }
+
         const path = peer.path;
         void runtime
           .runPromise(detachProject({ path }))
           .then(() => {
             broadcast(Event.make({ type: "event", kind: "project-left", path, name: path }));
             console.log(`project left: ${path}`);
-            if (attacherCount() === 0) void shutdown();
+            if (attacherCount() === 0) {
+              void shutdown();
+            }
+
+            return undefined;
           })
           .catch(() => {
-            if (attacherCount() === 0) void shutdown();
+            if (attacherCount() === 0) {
+              void shutdown();
+            }
           });
       });
     });
 
-    console.log(`foglight daemon listening on ${url}`);
+    console.log(`foglight daemon listening on ${daemon.url}`);
 
     const originalLog = console.log.bind(console);
     console.log = (...args: unknown[]) => {
       originalLog(...args);
       const line = args.map(String).join(" ");
       for (const peer of peers) {
-        if (peer.verbose) send(peer.socket, LogLine.make({ type: "log-line", line }));
+        if (peer.verbose) {
+          send(peer.socket, LogLine.make({ type: "log-line", line }));
+        }
       }
     };
   } catch (error) {
